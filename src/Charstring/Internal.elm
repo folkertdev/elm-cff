@@ -30,84 +30,148 @@ import Decode.CompactFontFormat
 import Decode.Extra exposing (andMap)
 
 
+{-| A Charstring
+
+The charstring is what defines the actual shape of a glyph. It is a list of drawing instructions (like moveto, lineto, and curveto).
+
+-}
+type alias Charstring =
+    List Operation
+
+
 {-| Subroutines are initially stored as a `Bytes` sequence.
+
+At any point between operators in a charstring, a subroutine can be invoked.
+Subroutines are pieces of charstrings that occur often and are therfore abstracted to save space.
+
+Subroutines can be either global (used by all fonts in a fontset) or local (used only in this particular font).
+Decoding subroutines correctly is tricky because the decoding depends on the current `State`, in particular
+the arguments on the stack (`State.numbers`).
+
+The solution I've settled on is to store the subroutines as bytes, and when a subroutine is called, we evaluate the normal charstring decoder with the subroutine bytes.
+
+Something we know about subroutines is that they must end in either Return (opcode 11) or EndChar (opcode 14).
+This is not generally true about charstrings, because the final operator could be a local/global subroutine call.
+
 -}
 type alias Subroutines =
     Array Bytes
 
 
-type alias Charstring =
-    List Operation
-
-
+{-| A list of arguments and an operator code
+-}
 type alias Segment =
     { operator : Int, arguments : List Number.Number }
 
 
 {-| Decode a single segment up to and including the operator token
 -}
-decodeSegment : Int -> Decoder ( Int, Segment )
-decodeSegment bytesRemaining =
-    Decode.loop ( bytesRemaining, [] ) decodeSegmentHelp
+decodeSegment : Decoder Segment
+decodeSegment =
+    Decode.loop [] decodeSegmentHelp
 
 
 {-| Step the state forward until a Return or Endchar
+
+This decoder makes heavy use of counting the number of decoded bytes to not read past the end of the charstring.
+A charstring can end in 4 different opcodes
+
+  - code 11: subroutine return
+  - code 14: endchar
+  - code 10: local subroutine call
+  - code 29: global subroutine call
+
+In the first 2 cases we're definitely done, but the latter two are difficult.
+They can occur as the final operator, but don't need to. So just stopping when they are encountered
+would be incorrect.
+
+The decoding of the called subroutine could (and probably should) signal that the end was reached.
+
 -}
-decodeSubroutine : Int -> State -> Decoder ( List (List Operation), State )
-decodeSubroutine bytesRemaining state =
-    Decode.loop ( bytesRemaining, [], state ) decodeSubroutineHelp
-        |> Decode.map (\( operations, newState ) -> ( operations, newState ))
+decodeSubroutine : State -> Decoder (EndReached ( List Charstring, State ))
+decodeSubroutine state =
+    Decode.loop ( [], state ) decodeSubroutineHelp
 
 
-decodeSubroutineHelp : ( Int, List (List Operation), State ) -> Decoder (Step ( Int, List (List Operation), State ) ( List (List Operation), State ))
-decodeSubroutineHelp ( bytesRemaining, accum, state ) =
-    if bytesRemaining <= 0 then
-        Decode.succeed (Done ( List.reverse accum, state ))
+type EndReached a
+    = EndReached a
+    | EndNotReached a
 
-    else
-        let
-            addOperations : ( Int, List Operation, State ) -> Step ( Int, List (List Operation), State ) x
-            addOperations ( newRemainder, operations, newState ) =
-                Loop ( newRemainder, operations :: accum, newState )
-        in
-        decodeSegment bytesRemaining
-            |> Decode.andThen
-                (\( newBytesRemaining, segment ) ->
-                    case segment.operator of
-                        14 ->
-                            Decode.succeed (Done ( List.reverse accum, { state | numbers = [] } ))
 
-                        11 ->
-                            Decode.succeed
-                                (Done
+decodeSubroutineHelp : ( List (List Operation), State ) -> Decoder (Step ( List (List Operation), State ) (EndReached ( List (List Operation), State )))
+decodeSubroutineHelp ( accum, state ) =
+    let
+        addOperations : ( List Operation, State ) -> Step ( List (List Operation), State ) x
+        addOperations ( operations, newState ) =
+            Loop ( operations :: accum, newState )
+
+        handleSubroutineCall segment subroutineCall =
+            case subroutineCall { state | numbers = state.numbers ++ List.map Number.toInt segment.arguments } of
+                Nothing ->
+                    Decode.fail
+
+                Just (EndReached ( operations, newState )) ->
+                    Decode.succeed
+                        (Done
+                            (EndReached
+                                ( List.reverse (operations :: accum)
+                                , newState
+                                )
+                            )
+                        )
+
+                Just (EndNotReached ( operations, newState )) ->
+                    Decode.succeed
+                        (Loop
+                            ( operations :: accum
+                            , newState
+                            )
+                        )
+    in
+    decodeSegment
+        |> Decode.andThen
+            (\segment ->
+                case segment.operator of
+                    10 ->
+                        handleSubroutineCall segment callsubr
+
+                    29 ->
+                        handleSubroutineCall segment callgsubr
+
+                    14 ->
+                        Decode.succeed (Done (EndReached ( List.reverse accum, { state | numbers = [] } )))
+
+                    11 ->
+                        Decode.succeed
+                            (Done
+                                (EndNotReached
                                     ( List.reverse accum
-                                    , { state
-                                        | numbers = state.numbers ++ List.map Number.toInt segment.arguments
-                                      }
+                                    , { state | numbers = state.numbers ++ List.map Number.toInt segment.arguments }
                                     )
                                 )
+                            )
 
-                        _ ->
-                            interpretSegment state ( newBytesRemaining, segment, [] )
-                                |> Decode.map addOperations
-                )
+                    _ ->
+                        interpretSegment state ( segment, [] )
+                            |> Decode.map addOperations
+            )
 
 
-decodeSegmentHelp : ( Int, List Number ) -> Decoder (Step ( Int, List Number ) ( Int, { operator : Int, arguments : List Number.Number } ))
-decodeSegmentHelp ( bytesRemaining, arguments ) =
+decodeSegmentHelp : List Number -> Decoder (Step (List Number) { operator : Int, arguments : List Number.Number })
+decodeSegmentHelp arguments =
     Decode.unsignedInt8
         |> Decode.andThen
             (\byte ->
                 if isNumberByte byte then
                     Number.decodeHelp byte
-                        |> Decode.map (\number -> Loop ( bytesRemaining - Number.sizeFromFirstByte byte, number :: arguments ))
+                        |> Decode.map (\number -> Loop (number :: arguments))
 
                 else if byte == 12 then
                     Decode.unsignedInt8
-                        |> Decode.map (\v -> Done ( bytesRemaining - 2, { operator = v + 3072, arguments = List.reverse arguments } ))
+                        |> Decode.map (\v -> Done { operator = v + 3072, arguments = List.reverse arguments })
 
                 else
-                    Decode.succeed (Done ( bytesRemaining - 1, { operator = byte, arguments = List.reverse arguments } ))
+                    Decode.succeed (Done { operator = byte, arguments = List.reverse arguments })
             )
 
 
@@ -116,16 +180,17 @@ decode bytesRemaining { global, local } =
     let
         state =
             { initialState | global = global, local = local }
-
-        _ =
-            if False then
-                Debug.log "---------------" bytesRemaining
-
-            else
-                0
     in
-    decodeSubroutine bytesRemaining state
-        |> Decode.map (List.concat << Tuple.first)
+    decodeSubroutine state
+        |> Decode.map
+            (\result ->
+                case result of
+                    EndReached ( operations, _ ) ->
+                        List.concat operations
+
+                    EndNotReached ( operations, _ ) ->
+                        List.concat operations
+            )
 
 
 {-| Interpret a full segment to actually produce drawing instructions
@@ -133,8 +198,8 @@ decode bytesRemaining { global, local } =
 Also counts the number of stems and reads the masking bytes correctly.
 
 -}
-interpretSegment : State -> ( Int, Segment, List Operation ) -> Decoder ( Int, List Operation, State )
-interpretSegment state ( bytesRemaining, segment, operations ) =
+interpretSegment : State -> ( Segment, List Operation ) -> Decoder ( List Operation, State )
+interpretSegment state ( segment, operations ) =
     Decode.loop
         { state =
             { state
@@ -142,7 +207,6 @@ interpretSegment state ( bytesRemaining, segment, operations ) =
                 , current = Nothing
                 , length = List.length state.numbers + List.length segment.arguments
             }
-        , bytesRemaining = bytesRemaining
         , operations = operations
         , opcode = segment.operator
         }
@@ -150,23 +214,22 @@ interpretSegment state ( bytesRemaining, segment, operations ) =
 
 
 type alias LoopState =
-    { opcode : Int, bytesRemaining : Int, operations : List Operation, state : State }
+    { opcode : Int, operations : List Operation, state : State }
 
 
-interpretSegmentLoop : LoopState -> Decoder (Step LoopState ( Int, List Operation, State ))
-interpretSegmentLoop { opcode, bytesRemaining, operations, state } =
-    interpretStatementHelp state opcode bytesRemaining
+interpretSegmentLoop : LoopState -> Decoder (Step LoopState ( List Operation, State ))
+interpretSegmentLoop { opcode, operations, state } =
+    interpretStatementHelp state opcode
         |> Decode.andThen
-            (\( newBytesRemaining, op, newState ) ->
+            (\( op, newState ) ->
                 case newState.current of
                     Nothing ->
-                        Decode.succeed (Done ( newBytesRemaining, List.reverse (List.reverse op ++ operations), newState ))
+                        Decode.succeed (Done ( List.reverse (List.reverse op ++ operations), newState ))
 
                     Just newOperator ->
                         Decode.succeed
                             (Loop
                                 { opcode = newOperator
-                                , bytesRemaining = newBytesRemaining
                                 , operations = List.reverse op ++ operations
                                 , state = newState
                                 }
@@ -174,7 +237,7 @@ interpretSegmentLoop { opcode, bytesRemaining, operations, state } =
             )
 
 
-interpretStatementHelp state opcode newBytesRemaining =
+interpretStatementHelp state opcode =
     let
         handleMask result =
             case result of
@@ -187,13 +250,13 @@ interpretStatementHelp state opcode newBytesRemaining =
                         Decode.fail
 
                     else
-                        Decode.succeed ( newBytesRemaining, [], state )
+                        Decode.succeed ( [], state )
 
                 Ok (Just ( op, newState )) ->
-                    Decode.succeed ( newBytesRemaining, op, newState )
+                    Decode.succeed ( op, newState )
 
                 Err ( bytesChomped, op, newState ) ->
-                    Decode.succeed ( newBytesRemaining - bytesChomped, op, newState )
+                    Decode.succeed ( op, newState )
     in
     case opcode of
         19 ->
@@ -212,13 +275,13 @@ interpretStatementHelp state opcode newBytesRemaining =
                             Debug.log "**** decodeWithOptionsHelp operator failed |||||||||||||||||||||||||||||||||||||||||||| =====================================" ( opcode, state.numbers, state )
                     in
                     if List.member opcode [] then
-                        Decode.succeed ( newBytesRemaining, [], { state | numbers = [], current = Nothing } )
+                        Decode.succeed ( [], { state | numbers = [], current = Nothing } )
 
                     else
                         Debug.todo "crash"
 
                 Just ( op, newState ) ->
-                    Decode.succeed ( newBytesRemaining, op, newState )
+                    Decode.succeed ( op, newState )
 
 
 {-| Is the current byte (the start of) a number?
@@ -277,7 +340,7 @@ initialSubroutines =
     Array.empty
 
 
-call : Subroutines -> Int -> State -> Maybe ( List Operation, State )
+call : Subroutines -> Int -> State -> Maybe (EndReached ( List Operation, State ))
 call subroutines index state =
     let
         size =
@@ -300,7 +363,7 @@ call subroutines index state =
         Just buffer ->
             let
                 decoder =
-                    decodeSubroutine (Bytes.width buffer) state
+                    decodeSubroutine state
             in
             case Decode.decode decoder buffer of
                 Nothing ->
@@ -310,8 +373,11 @@ call subroutines index state =
                     in
                     Nothing
 
-                Just ( operations, newState ) ->
-                    Just ( List.concat operations, newState )
+                Just (EndReached ( operations, newState )) ->
+                    Just (EndReached ( List.concat operations, newState ))
+
+                Just (EndNotReached ( operations, newState )) ->
+                    Just (EndNotReached ( List.concat operations, newState ))
 
 
 mask : Int -> (List Int -> Operation) -> State -> Decoder (Result ( Int, List Operation, State ) (Maybe ( List Operation, State )))
@@ -592,7 +658,7 @@ vlineto state =
 
 {-| Call a local subroutine
 -}
-callsubr : State -> Maybe ( List Operation, State )
+callsubr : State -> Maybe (EndReached ( List Operation, State ))
 callsubr state =
     unSnoc state.numbers
         |> Maybe.andThen
@@ -608,7 +674,7 @@ callsubr state =
 
 {-| Call a global subroutine
 -}
-callgsubr : State -> Maybe ( List Operation, State )
+callgsubr : State -> Maybe (EndReached ( List Operation, State ))
 callgsubr state =
     case unSnoc state.numbers of
         Just ( index, newNumbers ) ->
@@ -1016,10 +1082,7 @@ operator code state =
         8 ->
             rrcurveto 8 state
 
-        10 ->
-            callsubr state
-
-        -- 11, 14, 19 and 20 are all handled elsewhere
+        -- 11, 14, 19 and 20, 10, 29 are all handled elsewhere
         21 ->
             rmoveto state
 
@@ -1037,9 +1100,6 @@ operator code state =
 
         27 ->
             hhcurveto state
-
-        29 ->
-            callgsubr state
 
         30 ->
             vhcurveto state
