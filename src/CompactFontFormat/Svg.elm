@@ -1,4 +1,4 @@
-module CompactFontFormat.Svg exposing (convert, glyph)
+module CompactFontFormat.Svg exposing (glyph, convert)
 
 {-| Convert the CFF drawing instructions into SVG drawing instructions
 
@@ -7,6 +7,11 @@ because these are signals to the rasterizer. With SVG, the browser rasterizer wi
 It cannot be influenced from SVG path instructions.
 
 The functions in this module will automatically close the path.
+
+
+## Functions
+
+@docs glyph, convert
 
 -}
 
@@ -56,7 +61,7 @@ convertHelp operations moveto drawtos subpaths =
         first :: rest ->
             case first of
                 MoveTo point ->
-                    convertHelp rest (Path.MoveTo Absolute (asFloats ( point.x, point.y ))) [] ({ moveto = moveto, drawtos = List.reverse drawtos } :: subpaths)
+                    convertHelp rest (Path.MoveTo Absolute (asFloats ( point.x, point.y ))) [] ({ moveto = moveto, drawtos = List.reverse (Path.ClosePath :: drawtos) } :: subpaths)
 
                 CurveTo p1 p2 p3 ->
                     let

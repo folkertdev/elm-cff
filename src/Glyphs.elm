@@ -10,7 +10,7 @@ import Dict exposing (Dict)
 import Dict.Private exposing (Private)
 import Dict.Top exposing (Top)
 import Encoding exposing (Encodings)
-import Index exposing (OffsetSize)
+import Index
 
 
 type alias Glyphs =
@@ -24,67 +24,12 @@ type alias Glyphs =
     }
 
 
-parse : Int -> Bytes -> Top -> Subroutines -> Maybe Glyphs
-parse offset bytes top global =
-    parse2 offset bytes top global
-
-
-
-{-
-   let
-       decodeCharstrings : Maybe (List Charstring)
-       decodeCharstrings =
-           case top.charstrings of
-               Nothing ->
-                   Nothing
-
-               Just internalOffset ->
-                   decodeWithOffset (offset + internalOffset) Index.charstring bytes
-
-       groups =
-           case top.cid of
-               Nothing ->
-                   Nothing
-
-               Just cid ->
-                   Debug.todo "select and tops"
-
-       decodeEncoding =
-           decodeWithOffset top.encoding (Encoding.decode top.encoding) bytes
-
-       decodeCharsetAndCharstrings =
-           decodeCharstrings
-               |> Maybe.andThen
-                   (\charstrings ->
-                       decodeWithOffset top.charset (Charset.decode top.charset (List.length charstrings)) bytes
-                           |> Maybe.map (\charset -> ( charstrings, charset ))
-                   )
-
-       constructor ( privateDict, localSubRoutines ) encoding ( charstrings, charset ) =
-           { top = top
-           , private = privateDict
-           , subroutines = { global = global, local = localSubRoutines }
-           , encodings = encoding
-           , charset = charset
-           , charstrings = charstrings
-           }
-   in
-   Maybe.map3 constructor
-       (private top.private bytes)
-       decodeEncoding
-       decodeCharsetAndCharstrings
--}
-
-
-parse2 : Int -> Bytes -> Top -> Subroutines -> Maybe Glyphs
-parse2 offset bytes top global =
-    private offset top.private bytes
+parse : Bytes -> Top -> Subroutines -> Maybe Glyphs
+parse bytes top global =
+    private top.private bytes
         |> Maybe.andThen
             (\( privateDict, localSubRoutines ) ->
                 let
-                    _ =
-                        Debug.log "private decoded" ( Array.length global, localSubRoutines )
-
                     decodeCharstrings : Maybe (List Charstring)
                     decodeCharstrings =
                         case top.charstrings of
@@ -98,7 +43,7 @@ parse2 offset bytes top global =
                                         , local = localSubRoutines
                                         }
                                 in
-                                decodeWithOffset (offset + internalOffset) (Index.charstringWithOptions context) bytes
+                                decodeWithOffset internalOffset (Index.charstringWithOptions context) bytes
 
                     decodeCharsetAndCharstrings =
                         case decodeCharstrings of
@@ -106,7 +51,7 @@ parse2 offset bytes top global =
                                 Debug.log "decodeCharsetAndCharstrings failed" Nothing
 
                             Just charstrings ->
-                                decodeWithOffset (offset + top.charset) (Charset.decode top.charset (List.length charstrings)) bytes
+                                decodeWithOffset top.charset (Charset.decode { charset = top.charset, numberOfGlyphs = List.length charstrings }) bytes
                                     |> Maybe.map (\charset -> ( charstrings, charset ))
 
                     decodeEncoding =
@@ -128,16 +73,16 @@ parse2 offset bytes top global =
             )
 
 
-private : Int -> Maybe { size : Int, offset : Int } -> Bytes -> Maybe ( Private, Maybe Subroutines )
-private globalOffset arguments bytes =
+private : Maybe { size : Int, offset : Int } -> Bytes -> Maybe ( Private, Maybe Subroutines )
+private arguments bytes =
     case arguments of
         Just { size, offset } ->
             let
                 start =
-                    globalOffset + offset
+                    offset
 
                 end =
-                    globalOffset + offset + size
+                    offset + size
             in
             case decodeWithOffset start (Dict.Private.decode size) bytes of
                 Nothing ->
@@ -155,17 +100,9 @@ private globalOffset arguments bytes =
                         Just subroutineOffset ->
                             case decodeWithOffset (start + subroutineOffset) Index.subroutines bytes of
                                 Nothing ->
-                                    let
-                                        _ =
-                                            Debug.log "private decoded, no subs " ()
-                                    in
                                     Just ( privateDict, Nothing )
 
                                 Just localSubroutines ->
-                                    let
-                                        _ =
-                                            Debug.log "private decoded, with subs" (Array.length localSubroutines)
-                                    in
                                     Just ( privateDict, Just localSubroutines )
 
         Nothing ->
@@ -173,9 +110,25 @@ private globalOffset arguments bytes =
 
 
 decodeWithOffset offset decoder bytes =
-    Decode.decode (Decode.map2 (\_ k -> k) (Decode.string offset) decoder) bytes
+    Decode.decode (Decode.map2 (\_ k -> k) (Decode.bytes offset) decoder) bytes
 
 
-charstring : Int -> Glyphs -> Maybe Charstring
-charstring index glyphs =
-    Array.get index glyphs.charstrings
+charstring : Glyphs -> Int -> Maybe { width : Int, instructions : Charstring }
+charstring glyphs index =
+    case Array.get index glyphs.charstrings of
+        Nothing ->
+            Nothing
+
+        Just cstring ->
+            case cstring of
+                (Charstring.Width w) :: rest ->
+                    Just
+                        { width = w + glyphs.private.nominal_width_x
+                        , instructions = cstring
+                        }
+
+                _ ->
+                    Just
+                        { width = glyphs.private.default_width_x
+                        , instructions = cstring
+                        }

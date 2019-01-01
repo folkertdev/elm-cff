@@ -1,9 +1,25 @@
-module Dict.Top exposing (Cid, Top, decode)
+module Dict.Top exposing
+    ( Top, Cid
+    , decode
+    , Point, FontBoundingBox, FontMatrix
+    )
+
+{-| The top-level dictionaries of all fonts in the file.
+
+@docs Top, Cid
+
+@docs decode
+
+@docs Point, FontBoundingBox, FontMatrix
+
+-}
 
 import Bytes.Decode as Decode exposing (Decoder, Step(..))
 import Number exposing (Number, Operator(..), entry)
 
 
+{-| Decode the top dict given its size (in bytes)
+-}
 decode : Int -> Decoder Top
 decode remainingBytes =
     -- TODO this -1 is pretty arbitrary
@@ -52,6 +68,8 @@ decodeHelp ( remainingBytes, top, cid ) =
                 )
 
 
+{-| Additional operators used in CIDFonts
+-}
 type alias Cid =
     { ros : ( Int, Int, Int )
     , font_version : Float
@@ -78,6 +96,8 @@ defaultCid =
     }
 
 
+{-| The font matrix
+-}
 type alias FontMatrix =
     { a : Float
     , b : Float
@@ -92,10 +112,14 @@ defaultFontMatrix =
     FontMatrix 0.001 0.0 0.0 0.001 0.0 0.0
 
 
+{-| A 2d point
+-}
 type alias Point =
     { x : Int, y : Int }
 
 
+{-| The font bounding box
+-}
 type alias FontBoundingBox =
     { bottomLeft : Point
     , topRight : Point
@@ -108,6 +132,8 @@ defaultFontBoundingBox =
     }
 
 
+{-| The TOP dict
+-}
 type alias Top =
     { -- The string ID for the version of the font.
       version : Maybe Int

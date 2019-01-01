@@ -2,7 +2,7 @@ module Encoding exposing (Encodings, decode, get)
 
 import Array exposing (Array)
 import Bytes.Decode as Decode exposing (Decoder)
-import Utils
+import Decode.Extra
 
 
 type Encodings
@@ -47,18 +47,14 @@ decode encoding =
 
 decodeFormat0 =
     Decode.unsignedInt8
-        |> Decode.andThen
-            (\num_codes ->
-                Utils.exactly num_codes Decode.unsignedInt8
-                    |> Decode.map Array.fromList
-            )
+        |> Decode.andThen (\num_codes -> Decode.Extra.array num_codes Decode.unsignedInt8)
 
 
 decodeFormat1 =
     Decode.unsignedInt8
         |> Decode.andThen
             (\numRanges ->
-                Utils.exactly numRanges decodeRange
+                Decode.Extra.exactly numRanges decodeRange
                     |> Decode.map Array.fromList
             )
 

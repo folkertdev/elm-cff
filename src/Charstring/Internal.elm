@@ -1,4 +1,4 @@
-module Charstring.Internal exposing (Charstring, Operation(..), Point, Segment, Subroutines, decode, decodeSegments, initialSubroutines)
+module Charstring.Internal exposing (Charstring, Operation(..), Point, Segment, Subroutines, decode, initialSubroutines)
 
 {-| The Charstring (CFF) internals
 
@@ -26,11 +26,13 @@ import Bytes exposing (Bytes, Endianness(..))
 import Bytes.Decode as Decode exposing (Decoder, Step(..))
 import Bytes.Encode
 import Charstring.Number as Number exposing (Number)
-import Utils exposing (exactly, keep)
+import Decode.CompactFontFormat
+import Decode.Extra exposing (andMap)
 
 
+{-| Subroutines are initially stored as a `Bytes` sequence.
+-}
 type alias Subroutines =
-    -- { offsetTable : Array ( Int, Int ), buffer : Bytes, offsetInBuffer : Int }
     Array Bytes
 
 
@@ -40,27 +42,6 @@ type alias Charstring =
 
 type alias Segment =
     { operator : Int, arguments : List Number.Number }
-
-
-{-| Decode a charstring as a list of segments
-
-This may give a problem when there are masks in a subroutine.
-The bytes after the mask operator (that contain the masking bits) are added as an argument to the next instruction
-
--}
-decodeSegments : Int -> Decoder (List Segment)
-decodeSegments bytesRemaining =
-    Decode.loop ( bytesRemaining, [] ) decodeSegmentsHelp
-
-
-decodeSegmentsHelp : ( Int, List Segment ) -> Decoder (Step ( Int, List Segment ) (List Segment))
-decodeSegmentsHelp ( bytesRemaining, segments ) =
-    if bytesRemaining <= 0 then
-        Decode.succeed (Done (List.reverse segments))
-
-    else
-        decodeSegment bytesRemaining
-            |> Decode.map (\( newBytesRemaining, segment ) -> Loop ( newBytesRemaining, segment :: segments ))
 
 
 {-| Decode a single segment up to and including the operator token
@@ -114,44 +95,20 @@ decodeSubroutineHelp ( bytesRemaining, accum, state ) =
 
 decodeSegmentHelp : ( Int, List Number ) -> Decoder (Step ( Int, List Number ) ( Int, { operator : Int, arguments : List Number.Number } ))
 decodeSegmentHelp ( bytesRemaining, arguments ) =
-    if bytesRemaining <= 0 then
-        let
-            _ =
-                Debug.log "*** 0 bytes remaining" bytesRemaining
-        in
-        Decode.fail
+    Decode.unsignedInt8
+        |> Decode.andThen
+            (\byte ->
+                if isNumberByte byte then
+                    Number.decodeHelp byte
+                        |> Decode.map (\number -> Loop ( bytesRemaining - Number.sizeFromFirstByte byte, number :: arguments ))
 
-    else
-        Decode.unsignedInt8
-            |> Decode.andThen
-                (\byte ->
-                    {-
-                       let
-                           _ =
-                               if isNumberByte byte then
-                                   Debug.log "byte"
-                                       { byte = byte, current = bytesRemaining, delta = Number.sizeFromFirstByte byte, next = bytesRemaining - Number.sizeFromFirstByte byte, zarguments = arguments }
+                else if byte == 12 then
+                    Decode.unsignedInt8
+                        |> Decode.map (\v -> Done ( bytesRemaining - 2, { operator = v + 3072, arguments = List.reverse arguments } ))
 
-                               else if byte == 12 then
-                                   Debug.log "2ope"
-                                       { byte = byte, current = bytesRemaining, delta = 2, next = bytesRemaining - 2, zarguments = arguments }
-
-                               else
-                                   Debug.log "oper"
-                                       { byte = byte, current = bytesRemaining, delta = 1, next = bytesRemaining - 1, zarguments = arguments }
-                       in
-                    -}
-                    if isNumberByte byte then
-                        Number.decodeHelp byte
-                            |> Decode.map (\number -> Loop ( bytesRemaining - Number.sizeFromFirstByte byte, number :: arguments ))
-
-                    else if byte == 12 then
-                        Decode.unsignedInt8
-                            |> Decode.map (\v -> Done ( bytesRemaining - 2, { operator = v + 3072, arguments = List.reverse arguments } ))
-
-                    else
-                        Decode.succeed (Done ( bytesRemaining - 1, { operator = byte, arguments = List.reverse arguments } ))
-                )
+                else
+                    Decode.succeed (Done ( bytesRemaining - 1, { operator = byte, arguments = List.reverse arguments } ))
+            )
 
 
 decode : Int -> { global : Subroutines, local : Maybe Subroutines } -> Decoder Charstring
@@ -410,7 +367,7 @@ mask op toOperation state =
             numBytes =
                 (state.numStems + 7) // 8
         in
-        exactly numBytes Decode.unsignedInt8
+        Decode.Extra.exactly numBytes Decode.unsignedInt8
             |> Decode.andThen
                 (\bytes ->
                     Decode.succeed <|

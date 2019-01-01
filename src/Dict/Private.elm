@@ -9,17 +9,17 @@ type alias Numbers =
 
 
 type alias Private =
-    { blues : Maybe Numbers
-    , other_blues : Maybe Numbers
-    , family_blues : Maybe Numbers
-    , family_other_blues : Maybe Numbers
+    { blues : Numbers
+    , other_blues : Numbers
+    , family_blues : Numbers
+    , family_other_blues : Numbers
     , blue_scale : Float
     , blue_shift : Float
     , blue_fuzz : Float
     , std_hw : Maybe Float
     , std_vw : Maybe Float
-    , stem_snap_h : Maybe Numbers
-    , stem_snap_v : Maybe Numbers
+    , stem_snap_h : Numbers
+    , stem_snap_v : Numbers
     , force_bold : Bool
     , language_group : Int
     , expansion_factor : Float
@@ -31,17 +31,17 @@ type alias Private =
 
 
 defaultPrivate =
-    { blues = Nothing
-    , other_blues = Nothing
-    , family_blues = Nothing
-    , family_other_blues = Nothing
+    { blues = []
+    , other_blues = []
+    , family_blues = []
+    , family_other_blues = []
     , blue_scale = 0.039625
     , blue_shift = 7
     , blue_fuzz = 1
     , std_hw = Nothing
     , std_vw = Nothing
-    , stem_snap_h = Nothing
-    , stem_snap_v = Nothing
+    , stem_snap_h = []
+    , stem_snap_v = []
     , force_bold = False
     , language_group = 0
     , expansion_factor = 0.06
@@ -66,10 +66,6 @@ decodeHelp ( remainingBytes, private ) =
         entry
             |> Decode.andThen
                 (\({ operator, numbers, size } as et) ->
-                    let
-                        _ =
-                            Debug.log "entry" et
-                    in
                     case applyOperator operator numbers private of
                         Nothing ->
                             -- NOTE there is probably something weird with counting the bytes going on here
@@ -93,16 +89,16 @@ applyOperator (Operator _ operator) numbers private =
     -- TODO rust code uses first here
     case operator of
         6 ->
-            Just { private | blues = Just numbers }
+            Just { private | blues = numbers }
 
         7 ->
-            Just { private | other_blues = Just numbers }
+            Just { private | other_blues = numbers }
 
         8 ->
-            Just { private | family_blues = Just numbers }
+            Just { private | family_blues = numbers }
 
         9 ->
-            Just { private | family_other_blues = Just numbers }
+            Just { private | family_other_blues = numbers }
 
         10 ->
             Just { private | std_hw = List.head numbers |> Maybe.map Number.toFloat }
@@ -130,10 +126,10 @@ applyOperator (Operator _ operator) numbers private =
             withHead (\v -> { private | blue_fuzz = v |> Number.toFloat })
 
         3084 ->
-            Just { private | stem_snap_h = Just numbers }
+            Just { private | stem_snap_h = numbers }
 
         3085 ->
-            Just { private | stem_snap_v = Just numbers }
+            Just { private | stem_snap_v = numbers }
 
         3086 ->
             withHead (\v -> { private | force_bold = Number.toInt v /= 0 })
