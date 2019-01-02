@@ -1,8 +1,24 @@
-module Decode.Extra exposing (andMap, array, decodeWithOffset, dropLeft, exactly, fromMaybe, keep, mapM, sizedArray, unfold)
+module Decode.Extra exposing (andMap, array, decodeWithOffset, dropLeft, exactly, failWith, fromMaybe, keep, mapM, sizedArray, toMaybe, unfold, unfoldMaybe)
 
 import Array exposing (Array)
 import Bytes exposing (Bytes)
 import Bytes.Decode as Decode exposing (Decoder, Step(..))
+import Bytes.Encode as Encode
+
+
+{-| Fail with a string error message. If something goes wrong, adding a Debug.log here will tell you what happened
+-}
+failWith : String -> Decoder a
+failWith str =
+    let
+        _ =
+            if True then
+                Debug.log "failWith" str
+
+            else
+                str
+    in
+    Decode.fail
 
 
 fromMaybe : Maybe a -> Decoder a
@@ -13,6 +29,11 @@ fromMaybe m =
 
         Just v ->
             Decode.succeed v
+
+
+toMaybe : Decoder a -> Maybe a
+toMaybe decoder =
+    Decode.decode decoder emptyBytes
 
 
 mapM : (a -> Decoder b) -> List a -> Decoder (List b)
@@ -93,6 +114,15 @@ split buffer indices_ =
             List.map2 (\smaller larger -> larger - smaller) indices (List.drop 1 indices)
     in
     mapM Decode.bytes deltas
+
+
+emptyBytes =
+    Encode.encode (Encode.sequence [])
+
+
+unfoldMaybe : (state -> Maybe (Step ( a, state ) ( a, state ))) -> state -> Maybe ( List a, state )
+unfoldMaybe step state =
+    Decode.decode (unfold (fromMaybe << step) state) emptyBytes
 
 
 unfold : (state -> Decoder (Step ( a, state ) ( a, state ))) -> state -> Decoder ( List a, state )

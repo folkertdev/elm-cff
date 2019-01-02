@@ -1,4 +1,29 @@
-module Charstring.Number exposing (Number(..), decode, decodeHelp, encode, fromInt, sizeFromFirstByte, toInt)
+module Charstring.Number exposing
+    ( Number(..), fromInt, toInt
+    , encode, decode
+    , decodeHelp
+    )
+
+{-| Numbers used in the Charstring 2 spec
+
+Numbers are used as arguments to operators. Because both are encoded as bytes, we need a mechanism to differentiate operators from arguments, while still allowing all numbers to be arguments
+Operators are encoded as numbers 0..31. Anything above 31 is a number. The operator 28 also encoded a number (a 16-bit signed integer, to be precise).
+To be able to use 0..31 as arguments too, all the arguments are shifted over in a clever way (see [the spec]() for details).
+
+The arguments can span several bytes each, and can encode an Integer, or a 16.16 fixed-point number (16 digits before the decimal point, 16 after).
+In further use, the fixed point numbers are rounded to integers.
+
+
+## Number
+
+@docs Number, fromInt, toInt
+
+
+## Encoding and Decoding
+
+@docs encode, decode
+
+-}
 
 import Bitwise
 import Bytes exposing (Bytes, Endianness(..))
@@ -11,11 +36,15 @@ type Number
     | Integer Int
 
 
+{-| Convert an integer to a `Number`
+-}
 fromInt : Int -> Number
 fromInt =
     Integer
 
 
+{-| Convert a `Number` to an integer. This rounds the `Fixed` numbers to the nearest integer
+-}
 toInt : Number -> Int
 toInt number =
     case number of
@@ -23,36 +52,13 @@ toInt number =
             i
 
         Fixed f ->
+            -- Fixed is a 16.16 format, so 16 bits after the radix point (i.e. the decimal dot '.')
+            -- Here we divide by 2^16 and round to get the nearest integer.
             round (toFloat f / 65536.0)
 
 
-{-| The size of a Number in bytes
-
-The size of a full number is known when reading its first byte
-
+{-| Decode a `Number`
 -}
-sizeFromFirstByte : Int -> Int
-sizeFromFirstByte byte =
-    if byte == 28 then
-        3
-
-    else if byte == 255 then
-        5
-
-    else if byte >= 32 && byte <= 246 then
-        1
-
-    else if byte >= 247 && byte <= 254 then
-        2
-
-    else
-        let
-            _ =
-                Debug.log "invalid byte" byte
-        in
-        Debug.todo "crash"
-
-
 decode : Decoder Number
 decode =
     Decode.andThen decodeHelp Decode.unsignedInt8
@@ -100,6 +106,8 @@ decodeHelp byte =
                 Decode.fail
 
 
+{-| Encode an integer as a `Number` by performing the shifts discussed above
+-}
 encode : Int -> Encoder
 encode number =
     if number >= -107 && number <= 107 then

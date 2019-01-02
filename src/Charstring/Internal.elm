@@ -1,14 +1,16 @@
-module Charstring.Internal exposing (Charstring, Operation(..), Point, Segment, Subroutines, decode, initialSubroutines)
+module Charstring.Internal exposing
+    ( Charstring
+    , Operation(..), Point
+    , decode, Subroutines
+    )
 
 {-| The Charstring (CFF) internals
 
+A charstring is a sequence of numbers that encode drawing and layout operators like moveto, lineto, and curveto.
 
-## Big Picture
-
-A charstring is a list of numbers that encode drawing intructions like moveto, lineto, and curveto.
-
-Because operators are normal numbers, we have to differentiate them from the arguments (which are also numbers).
-This is done with a shifting scheme (in Charstring.Number)
+Because both operators and their arguments are numbers, we have to differentiate the two.
+The operators use the numbers 0..31 (as unsignedInt8) and arguments use all other values.
+To be able to use 0..31 as arguments too, the arguments are shifted (in `Charstring.Number`).
 
 The arguments come first and are pushed onto a stack (or really a dequeue, we mostly use first in first out).
 When an operator is found, the arguments and the operator are bundled into a `Segment`.
@@ -17,6 +19,12 @@ A tricky thing is that while most operators only take these arguments, the masks
 the operator token. This means that we have to decode segment-by-segment.
 
 [spec]: https://www.adobe.com/content/dam/acom/en/devnet/font/pdfs/5177.Type2.pdf
+
+@docs Charstring
+
+@docs Operation, Point
+
+@docs decode, Subroutines
 
 -}
 
@@ -39,21 +47,32 @@ type alias Charstring =
     List Operation
 
 
+{-| A 2D point with integer coordinates
+-}
 type alias Point =
     { x : Int, y : Int }
 
 
 {-| The drawing operations
+
+For the full details see the [charstring 2 spec]().
+
+  - _HintMask_ and _CounterMask_: masks to turn on stem hints
+  - _HStem_ and _VStem_ definition of stems
+  - _Width_: optional value that gives the width of the charstring
+  - _MoveTo_: move the drawing cursor
+  - _LineTo_ and _CurveTo_: draw a line (resp. a cubic curve) from the current drawing cursor
+
 -}
 type Operation
-    = CounterMask (List Int)
-    | CurveTo Point Point Point
-    | HintMask (List Int)
+    = HintMask (List Int)
+    | CounterMask (List Int)
     | HStem Int Int
-    | LineTo Point
-    | MoveTo Point
     | VStem Int Int
     | Width Int
+    | MoveTo Point
+    | LineTo Point
+    | CurveTo Point Point Point
 
 
 {-| Subroutines are initially stored as a `Bytes` sequence.
@@ -63,12 +82,9 @@ Subroutines are pieces of charstrings that occur often and are therfore abstract
 
 Subroutines can be either global (used by all fonts in a fontset) or local (used only in this particular font).
 Decoding subroutines correctly is tricky because the decoding depends on the current `State`, in particular
-the arguments on the stack (`State.numbers`).
+the arguments on the stack (`State.argumentStack`).
 
 The solution I've settled on is to store the subroutines as bytes, and when a subroutine is called, we evaluate the normal charstring decoder with the subroutine bytes.
-
-Something we know about subroutines is that they must end in either Return (opcode 11) or EndChar (opcode 14).
-This is not generally true about charstrings, because the final operator could be a local/global subroutine call.
 
 -}
 type alias Subroutines =
@@ -135,7 +151,7 @@ decodeSubroutineHelp ( accum, state ) =
             -> (State -> Maybe (EndReached ( Charstring, State )))
             -> Decoder (Step ( List Charstring, State ) (EndReached ( List Charstring, State )))
         handleSubroutineCall segment subroutineCall =
-            case subroutineCall { state | numbers = state.numbers ++ List.map Number.toInt segment.arguments } of
+            case subroutineCall { state | argumentStack = state.argumentStack ++ List.map Number.toInt segment.arguments } of
                 Nothing ->
                     Decode.fail
 
@@ -163,9 +179,8 @@ decodeSubroutineHelp ( accum, state ) =
                 let
                     newState =
                         { state
-                            | numbers = state.numbers ++ List.map Number.toInt segment.arguments
-                            , current = Nothing
-                            , length = List.length state.numbers + List.length segment.arguments
+                            | argumentStack = state.argumentStack ++ List.map Number.toInt segment.arguments
+                            , length = List.length state.argumentStack + List.length segment.arguments
                         }
                 in
                 case segment.operator of
@@ -176,7 +191,7 @@ decodeSubroutineHelp ( accum, state ) =
                         handleSubroutineCall segment callgsubr
 
                     14 ->
-                        Decode.succeed (Done (EndReached ( List.reverse accum, { state | numbers = [] } )))
+                        Decode.succeed (Done (EndReached ( List.reverse accum, { state | argumentStack = [] } )))
 
                     11 ->
                         Decode.succeed
@@ -197,7 +212,7 @@ decodeSubroutineHelp ( accum, state ) =
                             |> Decode.map addOperations
 
                     _ ->
-                        interpretSegment state ( segment, [] )
+                        interpretSegment state segment
                             |> Decode.map addOperations
             )
 
@@ -220,8 +235,10 @@ decodeSegmentHelp arguments =
             )
 
 
-decode : Int -> { global : Subroutines, local : Maybe Subroutines } -> Decoder Charstring
-decode bytesRemaining { global, local } =
+{-| Decode a `Charstring` given global and local subroutines.
+-}
+decode : { global : Subroutines, local : Maybe Subroutines } -> Decoder Charstring
+decode { global, local } =
     let
         state =
             { initialState | global = global, local = local }
@@ -243,91 +260,13 @@ decode bytesRemaining { global, local } =
 Also counts the number of stems and reads the masking bytes correctly.
 
 -}
-interpretSegment : State -> ( Segment, List Operation ) -> Decoder ( List Operation, State )
-interpretSegment state ( segment, operations ) =
-    Decode.loop
-        { state =
-            { state
-                | numbers = state.numbers ++ List.map Number.toInt segment.arguments
-                , current = Nothing
-                , length = List.length state.numbers + List.length segment.arguments
-            }
-        , operations = operations
-        , opcode = segment.operator
+interpretSegment : State -> Segment -> Decoder ( List Operation, State )
+interpretSegment state segment =
+    decodeDrawingOperator segment.operator
+        { state
+            | argumentStack = state.argumentStack ++ List.map Number.toInt segment.arguments
+            , length = List.length state.argumentStack + List.length segment.arguments
         }
-        interpretSegmentLoop
-
-
-type alias LoopState =
-    { opcode : Int, operations : List Operation, state : State }
-
-
-interpretSegmentLoop : LoopState -> Decoder (Step LoopState ( List Operation, State ))
-interpretSegmentLoop { opcode, operations, state } =
-    interpretStatementHelp state opcode
-        |> Decode.andThen
-            (\( op, newState ) ->
-                case newState.current of
-                    Nothing ->
-                        Decode.succeed (Done ( List.reverse (List.reverse op ++ operations), newState ))
-
-                    Just newOperator ->
-                        Decode.succeed
-                            (Loop
-                                { opcode = newOperator
-                                , operations = List.reverse op ++ operations
-                                , state = newState
-                                }
-                            )
-            )
-
-
-interpretStatementHelp state opcode =
-    let
-        handleMask result =
-            case result of
-                Ok Nothing ->
-                    let
-                        _ =
-                            Debug.log "hint mask caused a failure" opcode
-                    in
-                    if True then
-                        Decode.fail
-
-                    else
-                        Decode.succeed ( [], state )
-
-                Ok (Just ( op, newState )) ->
-                    Decode.succeed ( op, newState )
-
-                Err ( bytesChomped, op, newState ) ->
-                    Decode.succeed ( op, newState )
-    in
-    case opcode of
-        {-
-           19 ->
-               mask 19 HintMask state
-                   |> Decode.andThen handleMask
-
-           20 ->
-               mask 20 CounterMask state
-                   |> Decode.andThen handleMask
-        -}
-        _ ->
-            case operator opcode state of
-                Nothing ->
-                    let
-                        _ =
-                            Debug.log "**** decodeWithOptionsHelp operator failed |||||||||||||||||||||||||||||||||||||||||||| =====================================" ( opcode, state.numbers, state )
-                    in
-                    if List.member opcode [] then
-                        Decode.succeed ( [], { state | numbers = [], current = Nothing } )
-
-                    else
-                        Debug.todo "crash"
-
-                Just ( op, newState ) ->
-                    Decode.succeed ( op, newState )
 
 
 {-| Is the current byte (the start of) a number?
@@ -338,11 +277,10 @@ isNumberByte byte =
 
 
 type alias State =
-    { numbers : List Int
-    , numStems : Int
+    { argumentStack : List Int
+    , numberOfStems : Int
     , hstem : Int
     , vstem : Int
-    , current : Maybe Int
     , point : Point
     , length : Int
     , local : Maybe Subroutines
@@ -353,22 +291,16 @@ type alias State =
 
 initialState : State
 initialState =
-    { numbers = []
-    , numStems = 0
+    { argumentStack = []
+    , numberOfStems = 0
     , hstem = 0
     , vstem = 0
-    , current = Nothing
-    , point = Point 0 0
+    , point = { x = 0, y = 0 }
     , length = 0
     , local = Nothing
-    , global = initialSubroutines
+    , global = Array.empty
     , width = Nothing
     }
-
-
-initialSubroutines : Subroutines
-initialSubroutines =
-    Array.empty
 
 
 call : Subroutines -> Int -> State -> Maybe (EndReached ( List Operation, State ))
@@ -418,9 +350,9 @@ mask op toOperation state =
 
 maskStep : Int -> (List Int -> Operation) -> State -> Decoder (Step ( Operation, State ) ( Operation, State ))
 maskStep op toOperation state =
-    if not (List.isEmpty state.numbers) then
+    if not (List.isEmpty state.argumentStack) then
         -- handle implicit `vstem` operations
-        case state.numbers of
+        case state.argumentStack of
             dx :: dStem :: rest ->
                 let
                     x =
@@ -428,124 +360,90 @@ maskStep op toOperation state =
                 in
                 ( VStem x (x + dStem)
                 , { state
-                    | numStems = 1 + state.numStems
+                    | numberOfStems = 1 + state.numberOfStems
                     , vstem = x + dStem
-                    , current = Just op
-                    , numbers = rest
+                    , argumentStack = rest
                   }
                 )
                     |> Loop
                     |> Decode.succeed
 
-            {-
-               [ n ] ->
-                   if n == -20 || n == -21 || True then
-                       ( []
-                       , { state
-                           | numStems = 1 + state.numStems
-                           , numbers = []
-                         }
-                       )
-                           |> Loop
-                           |> Debug.log "------------------------------------------->> "
-                           |> Decode.succeed
-
-                   else
-                       let
-                           _ =
-                               Debug.log "invalid mask arguments" state.numbers
-                       in
-                       Decode.fail
-            -}
+            -- TODO are -20 and -21 special?
             _ ->
-                let
-                    _ =
-                        Debug.log "invalid mask arguments" state.numbers
-                in
-                Decode.fail
+                Decode.Extra.failWith "invalid mask arguments "
 
     else
         let
             numBytes =
-                (state.numStems + 7) // 8
+                (state.numberOfStems + 7) // 8
         in
         Decode.Extra.exactly numBytes Decode.unsignedInt8
             |> Decode.map
                 (\bytes ->
-                    Done ( toOperation bytes, { state | current = Nothing } )
+                    Done ( toOperation bytes, state )
                 )
 
 
-hstem : State -> Maybe ( List Operation, State )
+hstem : State -> Decoder (Step ( Operation, State ) ( Operation, State ))
 hstem state =
-    if odd (List.length state.numbers) then
-        case state.numbers of
+    if odd (List.length state.argumentStack) then
+        case state.argumentStack of
             width :: rest ->
-                Just ( [ Width width ], { state | current = Just 1, numbers = rest } )
+                Decode.succeed <| Loop ( Width width, { state | argumentStack = rest } )
 
             _ ->
-                Nothing
+                Decode.Extra.failWith "hstem: invalid number of arguments for width"
 
     else
-        case state.numbers of
+        case state.argumentStack of
             y :: dy :: rest ->
                 let
                     newY =
                         state.hstem + y
                 in
-                Just
-                    ( [ HStem newY (newY + dy) ]
-                    , { state
-                        | numStems = state.numStems + 1
-                        , hstem = newY + dy
-                        , numbers = rest
-                        , current =
-                            if not (List.isEmpty rest) then
-                                Just 1
-
-                            else
-                                Nothing
-                      }
-                    )
+                Decode.succeed <|
+                    loopIf (rest /= [])
+                        ( HStem newY (newY + dy)
+                        , { state
+                            | numberOfStems = state.numberOfStems + 1
+                            , hstem = newY + dy
+                            , argumentStack = rest
+                          }
+                        )
 
             _ ->
-                Nothing
+                Decode.Extra.failWith "hstem: invalid number of arguments"
 
 
-vstem : State -> Maybe ( List Operation, State )
+vstem : State -> Decoder (Step ( Operation, State ) ( Operation, State ))
 vstem state =
-    if odd (List.length state.numbers) then
-        case state.numbers of
+    if odd (List.length state.argumentStack) then
+        case state.argumentStack of
             width :: rest ->
-                Just ( [ Width width ], { state | current = Just 3, numbers = rest } )
+                Decode.succeed (Loop ( Width width, { state | argumentStack = rest } ))
 
             _ ->
-                Nothing
+                Decode.Extra.failWith "vstem: invalid number of arguments for width"
 
     else
-        case state.numbers of
+        case state.argumentStack of
             x :: dx :: rest ->
                 let
                     newX =
                         state.vstem + x
                 in
-                Just
-                    ( [ VStem newX (newX + dx) ]
-                    , { state
-                        | numStems = state.numStems + 1
-                        , vstem = newX + dx
-                        , numbers = rest
-                        , current =
-                            if not (List.isEmpty rest) then
-                                Just 3
-
-                            else
-                                Nothing
-                      }
-                    )
+                Decode.succeed <|
+                    loopIf (rest /= [])
+                        ( VStem newX (newX + dx)
+                        , { state
+                            | numberOfStems = state.numberOfStems + 1
+                            , vstem = newX + dx
+                            , argumentStack = rest
+                          }
+                        )
 
             _ ->
-                Nothing
+                Decode.Extra.failWith "vstem: invalid number of arguments"
 
 
 moveto state ( dx, dy ) newNumbers =
@@ -553,74 +451,69 @@ moveto state ( dx, dy ) newNumbers =
         newPoint =
             { x = state.point.x + dx, y = state.point.y + dy }
     in
-    Just
-        ( [ MoveTo newPoint ]
-        , { state
-            | point = newPoint
-            , current = Nothing
-            , numbers = newNumbers
-          }
-        )
+    Decode.succeed <|
+        Done
+            ( MoveTo newPoint
+            , { state
+                | point = newPoint
+                , argumentStack = newNumbers
+              }
+            )
 
 
 movetoWidth state op =
-    case state.numbers of
+    case state.argumentStack of
         width :: rest ->
-            Just
-                ( [ Width width ]
-                , { state
-                    | current = Just op
-                    , numbers = rest
-                  }
-                )
+            Decode.succeed <|
+                Loop ( Width width, { state | argumentStack = rest } )
 
         _ ->
-            Nothing
+            Decode.Extra.failWith "moveto width: invalid number of arguments"
 
 
-vmoveto : State -> Maybe ( List Operation, State )
+vmoveto : State -> Decoder (Step ( Operation, State ) ( Operation, State ))
 vmoveto state =
-    if List.length state.numbers == 2 then
+    if List.length state.argumentStack == 2 then
         movetoWidth state 4
 
     else
-        case state.numbers of
+        case state.argumentStack of
             dy :: rest ->
                 moveto state ( 0, dy ) rest
 
             _ ->
-                Nothing
+                Decode.Extra.failWith "vmoveto: invalid number of arguments"
 
 
-hmoveto : State -> Maybe ( List Operation, State )
+hmoveto : State -> Decoder (Step ( Operation, State ) ( Operation, State ))
 hmoveto state =
-    if List.length state.numbers == 2 then
+    if List.length state.argumentStack == 2 then
         movetoWidth state 22
 
     else
-        case state.numbers of
+        case state.argumentStack of
             dx :: rest ->
                 moveto state ( dx, 0 ) rest
 
             _ ->
-                Nothing
+                Decode.Extra.failWith "hmoveto: invalid number of arguments"
 
 
-rmoveto : State -> Maybe ( List Operation, State )
+rmoveto : State -> Decoder (Step ( Operation, State ) ( Operation, State ))
 rmoveto state =
-    if List.length state.numbers == 3 then
+    if List.length state.argumentStack == 3 then
         movetoWidth state 21
 
     else
-        case state.numbers of
+        case state.argumentStack of
             dx :: dy :: rest ->
                 moveto state ( dx, dy ) rest
 
             _ ->
-                Nothing
+                Decode.Extra.failWith "rmoveto: invalid number of arguments"
 
 
-lineto : Int -> State -> ( Int, Int ) -> List Int -> ( List Operation, State )
+lineto : Int -> State -> ( Int, Int ) -> List Int -> ( Operation, State )
 lineto op state ( dx, dy ) newNumbers =
     let
         newPoint =
@@ -628,63 +521,54 @@ lineto op state ( dx, dy ) newNumbers =
             , y = state.point.y + dy
             }
     in
-    ( [ LineTo newPoint ]
+    ( LineTo newPoint
     , { state
-        | numbers = newNumbers
+        | argumentStack = newNumbers
         , point = newPoint
-        , current =
-            if List.isEmpty newNumbers then
-                Nothing
-
-            else
-                Just op
       }
     )
 
 
-rlineto : Int -> State -> Maybe ( List Operation, State )
+rlineto : Int -> State -> Decoder (Step ( Operation, State ) ( Operation, State ))
 rlineto op state =
-    case state.numbers of
+    case state.argumentStack of
         dx :: dy :: rest ->
-            lineto op state ( dx, dy ) rest
-                |> Just
+            Decode.succeed <| loopIf (rest /= []) (lineto op state ( dx, dy ) rest)
 
         _ ->
-            Nothing
+            Decode.Extra.failWith "rlineto: invalid number of arguments"
 
 
 linetoX op state =
-    case state.numbers of
+    case state.argumentStack of
         dx :: rest ->
-            lineto op state ( dx, 0 ) rest
-                |> Just
+            Decode.succeed <| loopIf (rest /= []) (lineto op state ( dx, 0 ) rest)
 
         _ ->
-            Nothing
+            Decode.Extra.failWith "linetoX: invalid number of arguments"
 
 
 linetoY op state =
-    case state.numbers of
+    case state.argumentStack of
         dy :: rest ->
-            lineto op state ( 0, dy ) rest
-                |> Just
+            Decode.succeed <| loopIf (rest /= []) (lineto op state ( 0, dy ) rest)
 
         _ ->
-            Nothing
+            Decode.Extra.failWith "linetoX: invalid number of arguments"
 
 
-hlineto : State -> Maybe ( List Operation, State )
+hlineto : State -> Decoder (Step ( Operation, State ) ( Operation, State ))
 hlineto state =
-    if odd state.length == odd (List.length state.numbers) then
+    if odd state.length == odd (List.length state.argumentStack) then
         linetoX 6 state
 
     else
         linetoY 6 state
 
 
-vlineto : State -> Maybe ( List Operation, State )
+vlineto : State -> Decoder (Step ( Operation, State ) ( Operation, State ))
 vlineto state =
-    if odd state.length == odd (List.length state.numbers) then
+    if odd state.length == odd (List.length state.argumentStack) then
         linetoY 7 state
 
     else
@@ -695,7 +579,7 @@ vlineto state =
 -}
 callsubr : State -> Maybe (EndReached ( List Operation, State ))
 callsubr state =
-    unSnoc state.numbers
+    unSnoc state.argumentStack
         |> Maybe.andThen
             (\( index, previous ) ->
                 case state.local of
@@ -703,7 +587,7 @@ callsubr state =
                         Nothing
 
                     Just subroutines ->
-                        call subroutines index { state | numbers = previous }
+                        call subroutines index { state | argumentStack = previous }
             )
 
 
@@ -711,31 +595,16 @@ callsubr state =
 -}
 callgsubr : State -> Maybe (EndReached ( List Operation, State ))
 callgsubr state =
-    case unSnoc state.numbers of
+    case unSnoc state.argumentStack of
         Just ( index, newNumbers ) ->
-            call state.global index { state | numbers = newNumbers }
+            call state.global index { state | argumentStack = newNumbers }
 
         Nothing ->
-            let
-                _ =
-                    Debug.log "callgsubr: no arguments" ()
-            in
             Nothing
 
 
-
-{-
-   case state.numbers of
-       index :: newNumbers ->
-           call False state.global index { state | numbers = newNumbers }
-
-       [] ->
-           Nothing
--}
-
-
 rcurveline state =
-    if List.length state.numbers == 2 then
+    if List.length state.argumentStack == 2 then
         rlineto 24 state
 
     else
@@ -743,7 +612,7 @@ rcurveline state =
 
 
 rlinecurve state =
-    if List.length state.numbers == 6 then
+    if List.length state.argumentStack == 6 then
         rrcurveto 25 state
 
     else
@@ -761,77 +630,80 @@ curveto cursor dx dy dx2 dy2 dx3 dy3 =
         newPoint =
             { x = b.x + dx3, y = b.y + dy3 }
     in
-    ( newPoint, [ CurveTo a b newPoint ] )
+    ( newPoint, CurveTo a b newPoint )
 
 
 curvetoHelper op state rest ( newPoint, operation ) =
-    Just
-        ( operation
-        , { state
-            | point = newPoint
-            , numbers = rest
-            , current =
-                if List.isEmpty rest then
-                    Nothing
-
-                else
-                    Just op
-          }
-        )
+    Decode.succeed <|
+        loopIf (rest /= [])
+            ( operation
+            , { state
+                | point = newPoint
+                , argumentStack = rest
+              }
+            )
 
 
-rrcurveto : Int -> State -> Maybe ( List Operation, State )
+loopIf condition =
+    if condition then
+        Loop
+
+    else
+        Done
+
+
+rrcurveto : Int -> State -> Decoder (Step ( Operation, State ) ( Operation, State ))
 rrcurveto op state =
-    case state.numbers of
+    case state.argumentStack of
         dx :: dy :: dx2 :: dy2 :: dx3 :: dy3 :: rest ->
             curveto state.point dx dy dx2 dy2 dx3 dy3
-                |> curvetoHelper op state rest
+                |> curvetoHelper 8 state rest
 
         _ ->
-            Nothing
+            Decode.Extra.failWith "rrcurveto: invalid number of arguments"
 
 
 vvcurveto state =
-    if odd (List.length state.numbers) then
-        case state.numbers of
+    if odd (List.length state.argumentStack) then
+        case state.argumentStack of
             dx :: dy :: dx2 :: dy2 :: d :: rest ->
                 curveto state.point dx dy dx2 dy2 0 d
                     |> curvetoHelper 26 state rest
 
             _ ->
-                Nothing
+                Decode.Extra.failWith "vvcurveto: invalid number of arguments in the odd case"
 
     else
-        case state.numbers of
+        case state.argumentStack of
             dy :: dx2 :: dy2 :: d :: rest ->
                 curveto state.point 0 dy dx2 dy2 0 d
                     |> curvetoHelper 26 state rest
 
             _ ->
-                Nothing
+                Decode.Extra.failWith "vvcurveto: invalid number of arguments in the even case"
 
 
 hhcurveto state =
-    if odd (List.length state.numbers) then
-        case state.numbers of
+    if odd (List.length state.argumentStack) then
+        case state.argumentStack of
             dy :: dx :: dx2 :: dy2 :: d :: rest ->
                 curveto state.point dx dy dx2 dy2 d 0
                     |> curvetoHelper 27 state rest
 
             _ ->
-                Nothing
+                Decode.Extra.failWith "hhcurveto: invalid number of arguments in the odd case"
 
     else
-        case state.numbers of
+        case state.argumentStack of
             dx :: dx2 :: dy2 :: d :: rest ->
                 curveto state.point dx 0 dx2 dy2 d 0
                     |> curvetoHelper 27 state rest
 
             _ ->
-                Nothing
+                Decode.Extra.failWith "hhcurveto: invalid number of arguments in the even case"
 
 
-vhcurveto : State -> Maybe ( List Operation, State )
+vhcurveto : State -> Decoder ( List Operation, State )
 vhcurveto state =
     let
         ( _, cursor, curves ) =
@@ -839,13 +711,13 @@ vhcurveto state =
                 |> vhSpecialCase1 state
                 |> vhSpecialCase2 state
     in
-    Just
+    Decode.succeed
         ( List.reverse curves
-        , { state | numbers = [], current = Nothing, point = cursor }
+        , { state | argumentStack = [], point = cursor }
         )
 
 
-hvcurveto : State -> Maybe ( List Operation, State )
+hvcurveto : State -> Decoder ( List Operation, State )
 hvcurveto state =
     let
         ( _, cursor, curves ) =
@@ -853,9 +725,9 @@ hvcurveto state =
                 |> hvSpecialCase1 state
                 |> hvSpecialCase2 state
     in
-    Just
+    Decode.succeed
         ( List.reverse curves
-        , { state | numbers = [], current = Nothing, point = cursor }
+        , { state | argumentStack = [], point = cursor }
         )
 
 
@@ -920,7 +792,7 @@ vhGeneralCase state =
                         -- impossible
                         ( stack, cursor, accum )
     in
-    looper 0 state.point state.numbers []
+    looper 0 state.point state.argumentStack []
 
 
 vhSpecialCase1 : State -> ( List Int, Point, List Operation ) -> ( List Int, Point, List Operation )
@@ -1034,7 +906,7 @@ hvGeneralCase state =
                         -- impossible
                         ( stack, cursor, accum )
     in
-    looper 0 state.point state.numbers []
+    looper 0 state.point state.argumentStack []
 
 
 hvSpecialCase1 : State -> ( List Int, Point, List Operation ) -> ( List Int, Point, List Operation )
@@ -1087,68 +959,63 @@ hvSpecialCase2 state ( stack, cursor, accum ) =
         ( stack, cursor, accum )
 
 
-operator : Int -> State -> Maybe ( List Operation, State )
-operator code state =
+decodeDrawingOperator : Int -> State -> Decoder ( List Operation, State )
+decodeDrawingOperator code state =
     case code of
         1 ->
-            hstem state
+            Decode.Extra.unfold hstem state
 
         18 ->
-            hstem state
+            Decode.Extra.unfold hstem state
 
         3 ->
-            vstem state
+            Decode.Extra.unfold vstem state
 
         23 ->
-            vstem state
+            Decode.Extra.unfold vstem state
 
         4 ->
-            vmoveto state
+            Decode.Extra.unfold vmoveto state
 
         5 ->
-            rlineto 5 state
+            Decode.Extra.unfold (rlineto 5) state
 
         6 ->
-            hlineto state
+            Decode.Extra.unfold hlineto state
 
         7 ->
-            vlineto state
+            Decode.Extra.unfold vlineto state
 
         8 ->
-            rrcurveto 8 state
+            Decode.Extra.unfold (rrcurveto 8) state
 
         -- 11, 14, 19 and 20, 10, 29 are all handled elsewhere
         21 ->
-            rmoveto state
+            Decode.Extra.unfold rmoveto state
 
         22 ->
-            hmoveto state
+            Decode.Extra.unfold hmoveto state
 
         24 ->
-            rcurveline state
+            Decode.Extra.unfold rcurveline state
 
         25 ->
-            rlinecurve state
+            Decode.Extra.unfold rlinecurve state
 
         26 ->
-            vvcurveto state
+            Decode.Extra.unfold vvcurveto state
 
         27 ->
-            hhcurveto state
+            Decode.Extra.unfold hhcurveto state
 
         30 ->
             vhcurveto state
 
         31 ->
             hvcurveto state
-                |> Maybe.map (\( op, newState ) -> ( op, { newState | numbers = [] } ))
 
         _ ->
-            let
-                _ =
-                    Debug.log "unkown charstring operator" code
-            in
-            Nothing
+            Decode.Extra.failWith ("decodeDrawingOperator: unkown charstring operator: " ++ String.fromInt code)
 
 
 even : Int -> Bool
@@ -1161,19 +1028,8 @@ odd x =
     (x |> modBy 2) /= 0
 
 
-last : List a -> Maybe a
-last list =
-    case list of
-        [ x ] ->
-            Just x
-
-        x :: xs ->
-            last xs
-
-        [] ->
-            Nothing
-
-
+{-| pop the last element off a list
+-}
 unSnoc : List a -> Maybe ( a, List a )
 unSnoc list =
     let

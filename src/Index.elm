@@ -4,7 +4,7 @@ import Array exposing (Array)
 import Bitwise
 import Bytes exposing (Bytes, Endianness(..))
 import Bytes.Decode as Decode exposing (Decoder, Step(..))
-import Charstring.Internal as Charstring exposing (Charstring, Subroutines, initialSubroutines)
+import Charstring.Internal as Charstring exposing (Charstring, Subroutines)
 import Decode.CompactFontFormat
 import Decode.Extra exposing (andMap)
 import Dict.Top exposing (Top)
@@ -30,16 +30,16 @@ charstring : Decoder (List Charstring)
 charstring =
     let
         context =
-            { global = initialSubroutines
+            { global = Array.empty
             , local = Nothing
             }
     in
-    sizedIndex (\size -> Charstring.decode size context)
+    sizedIndex (\size -> Charstring.decode context)
 
 
 charstringWithOptions : { global : Subroutines, local : Maybe Subroutines } -> Decoder (List Charstring)
 charstringWithOptions subs =
-    sizedIndex (\size -> Charstring.decode size subs)
+    sizedIndex (\size -> Charstring.decode subs)
 
 
 subroutines : Decoder Subroutines

@@ -19,7 +19,7 @@ import Bitwise
 import Bytes exposing (Bytes, Endianness(..))
 import Bytes.Decode as Decode exposing (Decoder, Step(..))
 import Charset exposing (Charset)
-import Charstring.Internal as Charstring exposing (Charstring, Operation, Segment, Subroutines)
+import Charstring.Internal as Charstring exposing (Charstring, Operation, Subroutines)
 import Decode.CompactFontFormat
 import Decode.Extra exposing (andMap)
 import Dict exposing (Dict)

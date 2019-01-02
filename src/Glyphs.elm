@@ -5,7 +5,7 @@ import Bitwise
 import Bytes exposing (Bytes, Endianness(..))
 import Bytes.Decode as Decode exposing (Decoder, Step(..))
 import Charset exposing (Charset)
-import Charstring.Internal as Charstring exposing (Charstring, Operation, Segment, Subroutines)
+import Charstring.Internal as Charstring exposing (Charstring, Operation, Subroutines)
 import Dict exposing (Dict)
 import Dict.Private exposing (Private)
 import Dict.Top exposing (Top)
