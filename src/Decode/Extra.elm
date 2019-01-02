@@ -1,4 +1,4 @@
-module Decode.Extra exposing (andMap, array, decodeWithOffset, dropLeft, exactly, fromMaybe, keep, mapM, sizedArray)
+module Decode.Extra exposing (andMap, array, decodeWithOffset, dropLeft, exactly, fromMaybe, keep, mapM, sizedArray, unfold)
 
 import Array exposing (Array)
 import Bytes exposing (Bytes)
@@ -93,3 +93,21 @@ split buffer indices_ =
             List.map2 (\smaller larger -> larger - smaller) indices (List.drop 1 indices)
     in
     mapM Decode.bytes deltas
+
+
+unfold : (state -> Decoder (Step ( a, state ) ( a, state ))) -> state -> Decoder ( List a, state )
+unfold step state =
+    Decode.loop ( [], state ) (unfoldHelp step)
+
+
+unfoldHelp step ( accum, state ) =
+    step state
+        |> Decode.map
+            (\result ->
+                case result of
+                    Loop ( operation, newState ) ->
+                        Loop ( operation :: accum, newState )
+
+                    Done ( operation, newState ) ->
+                        Done ( List.reverse (operation :: accum), newState )
+            )

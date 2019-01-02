@@ -39,6 +39,23 @@ type alias Charstring =
     List Operation
 
 
+type alias Point =
+    { x : Int, y : Int }
+
+
+{-| The drawing operations
+-}
+type Operation
+    = CounterMask (List Int)
+    | CurveTo Point Point Point
+    | HintMask (List Int)
+    | HStem Int Int
+    | LineTo Point
+    | MoveTo Point
+    | VStem Int Int
+    | Width Int
+
+
 {-| Subroutines are initially stored as a `Bytes` sequence.
 
 At any point between operators in a charstring, a subroutine can be invoked.
@@ -85,7 +102,15 @@ In the first 2 cases we're definitely done, but the latter two are difficult.
 They can occur as the final operator, but don't need to. So just stopping when they are encountered
 would be incorrect.
 
-The decoding of the called subroutine could (and probably should) signal that the end was reached.
+The decoding of the called subroutine signals that the end was reached, and stops reading more bytes.
+
+Two other codes are special:
+
+  - code 19: hintmask
+  - code 20: cntrmask
+
+The masking operators can read bytes after the operator. This complicates decoding considerably,
+because we can't split a charstring on the operator bytes (that would but the mask bits into the argument stack of the succeeding operator).
 
 -}
 decodeSubroutine : State -> Decoder (EndReached ( List Charstring, State ))
@@ -98,13 +123,17 @@ type EndReached a
     | EndNotReached a
 
 
-decodeSubroutineHelp : ( List (List Operation), State ) -> Decoder (Step ( List (List Operation), State ) (EndReached ( List (List Operation), State )))
+decodeSubroutineHelp : ( List Charstring, State ) -> Decoder (Step ( List Charstring, State ) (EndReached ( List Charstring, State )))
 decodeSubroutineHelp ( accum, state ) =
     let
-        addOperations : ( List Operation, State ) -> Step ( List (List Operation), State ) x
+        addOperations : ( List Operation, State ) -> Step ( List Charstring, State ) x
         addOperations ( operations, newState ) =
             Loop ( operations :: accum, newState )
 
+        handleSubroutineCall :
+            Segment
+            -> (State -> Maybe (EndReached ( Charstring, State )))
+            -> Decoder (Step ( List Charstring, State ) (EndReached ( List Charstring, State )))
         handleSubroutineCall segment subroutineCall =
             case subroutineCall { state | numbers = state.numbers ++ List.map Number.toInt segment.arguments } of
                 Nothing ->
@@ -131,6 +160,14 @@ decodeSubroutineHelp ( accum, state ) =
     decodeSegment
         |> Decode.andThen
             (\segment ->
+                let
+                    newState =
+                        { state
+                            | numbers = state.numbers ++ List.map Number.toInt segment.arguments
+                            , current = Nothing
+                            , length = List.length state.numbers + List.length segment.arguments
+                        }
+                in
                 case segment.operator of
                     10 ->
                         handleSubroutineCall segment callsubr
@@ -146,10 +183,18 @@ decodeSubroutineHelp ( accum, state ) =
                             (Done
                                 (EndNotReached
                                     ( List.reverse accum
-                                    , { state | numbers = state.numbers ++ List.map Number.toInt segment.arguments }
+                                    , newState
                                     )
                                 )
                             )
+
+                    19 ->
+                        mask segment.operator HintMask newState
+                            |> Decode.map addOperations
+
+                    20 ->
+                        mask segment.operator CounterMask newState
+                            |> Decode.map addOperations
 
                     _ ->
                         interpretSegment state ( segment, [] )
@@ -182,14 +227,14 @@ decode bytesRemaining { global, local } =
             { initialState | global = global, local = local }
     in
     decodeSubroutine state
-        |> Decode.map
+        |> Decode.andThen
             (\result ->
                 case result of
                     EndReached ( operations, _ ) ->
-                        List.concat operations
+                        Decode.succeed (List.concat operations)
 
-                    EndNotReached ( operations, _ ) ->
-                        List.concat operations
+                    EndNotReached _ ->
+                        Decode.fail
             )
 
 
@@ -259,14 +304,15 @@ interpretStatementHelp state opcode =
                     Decode.succeed ( op, newState )
     in
     case opcode of
-        19 ->
-            mask 19 HintMask state
-                |> Decode.andThen handleMask
+        {-
+           19 ->
+               mask 19 HintMask state
+                   |> Decode.andThen handleMask
 
-        20 ->
-            mask 20 CounterMask state
-                |> Decode.andThen handleMask
-
+           20 ->
+               mask 20 CounterMask state
+                   |> Decode.andThen handleMask
+        -}
         _ ->
             case operator opcode state of
                 Nothing ->
@@ -289,21 +335,6 @@ interpretStatementHelp state opcode =
 isNumberByte : Int -> Bool
 isNumberByte byte =
     byte == 28 || byte >= 32
-
-
-type alias Point =
-    { x : Int, y : Int }
-
-
-type Operation
-    = CounterMask (List Int)
-    | CurveTo Point Point Point
-    | HintMask (List Int)
-    | HStem Int Int
-    | LineTo Point
-    | MoveTo Point
-    | VStem Int Int
-    | Width Int
 
 
 type alias State =
@@ -380,8 +411,13 @@ call subroutines index state =
                     Just (EndNotReached ( List.concat operations, newState ))
 
 
-mask : Int -> (List Int -> Operation) -> State -> Decoder (Result ( Int, List Operation, State ) (Maybe ( List Operation, State )))
+mask : Int -> (List Int -> Operation) -> State -> Decoder ( List Operation, State )
 mask op toOperation state =
+    Decode.Extra.unfold (maskStep op toOperation) state
+
+
+maskStep : Int -> (List Int -> Operation) -> State -> Decoder (Step ( Operation, State ) ( Operation, State ))
+maskStep op toOperation state =
     if not (List.isEmpty state.numbers) then
         -- handle implicit `vstem` operations
         case state.numbers of
@@ -390,43 +426,43 @@ mask op toOperation state =
                     x =
                         state.vstem + dx
                 in
-                Just
-                    ( [ VStem x (x + dStem) ]
-                    , { state
-                        | numStems = 1 + state.numStems
-                        , vstem = x + dStem
-                        , current = Just op
-                        , numbers = rest
-                      }
-                    )
-                    |> Ok
+                ( VStem x (x + dStem)
+                , { state
+                    | numStems = 1 + state.numStems
+                    , vstem = x + dStem
+                    , current = Just op
+                    , numbers = rest
+                  }
+                )
+                    |> Loop
                     |> Decode.succeed
 
-            [ n ] ->
-                if n == -20 || n == -21 || True then
-                    Just
-                        ( []
-                        , { state
-                            | numStems = 1 + state.numStems
-                            , numbers = []
-                          }
-                        )
-                        |> Ok
-                        |> Decode.succeed
+            {-
+               [ n ] ->
+                   if n == -20 || n == -21 || True then
+                       ( []
+                       , { state
+                           | numStems = 1 + state.numStems
+                           , numbers = []
+                         }
+                       )
+                           |> Loop
+                           |> Debug.log "------------------------------------------->> "
+                           |> Decode.succeed
 
-                else
-                    let
-                        _ =
-                            Debug.log "invalid mask arguments" state.numbers
-                    in
-                    Decode.succeed (Ok Nothing)
-
+                   else
+                       let
+                           _ =
+                               Debug.log "invalid mask arguments" state.numbers
+                       in
+                       Decode.fail
+            -}
             _ ->
                 let
                     _ =
                         Debug.log "invalid mask arguments" state.numbers
                 in
-                Decode.succeed (Ok Nothing)
+                Decode.fail
 
     else
         let
@@ -434,10 +470,9 @@ mask op toOperation state =
                 (state.numStems + 7) // 8
         in
         Decode.Extra.exactly numBytes Decode.unsignedInt8
-            |> Decode.andThen
+            |> Decode.map
                 (\bytes ->
-                    Decode.succeed <|
-                        Err ( numBytes, [ toOperation bytes ], { state | current = Nothing } )
+                    Done ( toOperation bytes, { state | current = Nothing } )
                 )
 
 
