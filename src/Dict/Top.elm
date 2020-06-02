@@ -252,7 +252,8 @@ updateCid operator cid arguments =
             withHeadInt (\v -> { cid | font_name = Just v })
 
         _ ->
-            Debug.log "cid fell through" Nothing
+            -- ERROR cid fell through
+            Nothing
 
 
 updateTop : Operator -> Top -> List Argument -> Maybe Top
@@ -363,4 +364,5 @@ updateTop operator top arguments =
             withHeadInt (\v -> { top | base_font_blend = Just arguments })
 
         _ ->
-            Debug.log "top fell through" Nothing
+            -- ERROR top fell through
+            Nothing

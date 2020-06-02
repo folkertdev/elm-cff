@@ -25,13 +25,10 @@ the operator token. This means that we have to decode from left to right, one fu
 -}
 
 import Array exposing (Array)
-import Bitwise
 import Bytes exposing (Bytes, Endianness(..))
 import Bytes.Decode as Decode exposing (Decoder, Step(..))
-import Bytes.Encode
 import Charstring.Number as Number exposing (Number)
-import Decode.CompactFontFormat
-import Decode.Extra exposing (andMap)
+import Decode.Extra
 
 
 {-| The `Charstring` is what defines the actual shape of a glyph. It is a list of drawing instructions (like moveto, lineto, and curveto).
@@ -43,7 +40,9 @@ type alias Charstring =
 {-| A 2D point with integer coordinates
 -}
 type alias Point =
-    { x : Int, y : Int }
+    { x : Int
+    , y : Int
+    }
 
 
 {-| The drawing operations. For the full details see the [charstring 2 spec][spec].
@@ -324,10 +323,7 @@ call subroutines index state =
             in
             case Decode.decode decoder buffer of
                 Nothing ->
-                    let
-                        _ =
-                            Debug.log "error in local subroutine decoding" ()
-                    in
+                    -- ERROR error in local subroutine decoding
                     Nothing
 
                 Just (EndReached ( operations, newState )) ->

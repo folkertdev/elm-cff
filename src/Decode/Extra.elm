@@ -10,14 +10,16 @@ import Bytes.Encode as Encode
 -}
 failWith : String -> Decoder a
 failWith str =
-    let
-        _ =
-            if True then
-                Debug.log "failWith" str
+    {-
+       let
+           _ =
+               if True then
+                   Debug.log "failWith" str
 
-            else
-                str
-    in
+               else
+                   str
+       in
+    -}
     Decode.fail
 
 

@@ -127,7 +127,7 @@ alternative offet =
             Decode.unsignedInt8
                 |> Decode.andThen
                     (\format ->
-                        case Debug.log "=====> encoding format" format of
+                        case format of
                             0 ->
                                 Decode.unsignedInt8
                                     |> Decode.andThen
@@ -149,7 +149,7 @@ alternative offet =
                                         (\nRanges ->
                                             let
                                                 looper ( code, i, encoding ) =
-                                                    if i < Debug.log "nranges" nRanges then
+                                                    if i < nRanges then
                                                         Decode.unsignedInt8
                                                             |> Decode.andThen
                                                                 (\first ->
@@ -172,7 +172,7 @@ alternative offet =
                                                         go first nLeft (j + 1) (Dict.insert j code encoding) (code + 1)
 
                                                     else
-                                                        Debug.log "---------------> new code new encoding" ( code, encoding )
+                                                        ( code, encoding )
                                             in
                                             Decode.loop ( 1, 0, Dict.empty ) looper
                                         )

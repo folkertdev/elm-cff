@@ -13,13 +13,11 @@ module Glyphs exposing
 -}
 
 import Array exposing (Array)
-import Bitwise
 import Bytes exposing (Bytes, Endianness(..))
-import Bytes.Decode as Decode exposing (Decoder, Step(..))
+import Bytes.Decode as Decode exposing (Step(..))
 import Charset exposing (Charset)
-import Charstring exposing (Charstring, Operation, Subroutines)
+import Charstring exposing (Charstring, Subroutines)
 import Decode.CompactFontFormat exposing (GID(..), SID(..))
-import Dict exposing (Dict)
 import Dict.Private exposing (Private)
 import Dict.Top exposing (Top)
 import Encoding exposing (Encoding)
@@ -49,7 +47,8 @@ parse bytes top global =
                     decodeCharstrings =
                         case top.charstrings of
                             Nothing ->
-                                Debug.log "no charstrings in this top dict" Nothing
+                                -- ERROR no charstrings in this top dict
+                                Nothing
 
                             Just internalOffset ->
                                 let
@@ -63,7 +62,8 @@ parse bytes top global =
                     decodeCharsetAndCharstrings =
                         case decodeCharstrings of
                             Nothing ->
-                                Debug.log "decodeCharsetAndCharstrings failed" Nothing
+                                -- ERROR decodeCharsetAndCharstrings failed
+                                Nothing
 
                             Just charstrings ->
                                 decodeWithOffset top.charset (Charset.decode { offset = top.charset, numberOfGlyphs = Array.length charstrings }) bytes
@@ -95,16 +95,10 @@ private arguments bytes =
             let
                 start =
                     offset
-
-                end =
-                    offset + size
             in
             case decodeWithOffset start (Dict.Private.decode size) bytes of
                 Nothing ->
-                    let
-                        _ =
-                            Debug.log "private failed to decode, " ()
-                    in
+                    -- ERROR private failed to decode,
                     Nothing
 
                 Just privateDict ->
@@ -124,6 +118,7 @@ private arguments bytes =
             Just ( Dict.Private.default, Nothing )
 
 
+decodeWithOffset : Int -> Decode.Decoder a -> Bytes -> Maybe a
 decodeWithOffset offset decoder bytes =
     Decode.decode (Decode.map2 (\_ k -> k) (Decode.bytes offset) decoder) bytes
 

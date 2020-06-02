@@ -1,4 +1,4 @@
-module CompactFontFormat.Svg exposing (glyph, convert)
+module CompactFontFormat.Svg exposing (glyph)
 
 {-| Convert the CFF drawing instructions into SVG drawing instructions
 
@@ -11,11 +11,11 @@ The functions in this module will automatically close the path.
 
 ## Functions
 
-@docs glyph, convert
+@docs glyph
 
 -}
 
-import Charstring exposing (Charstring, Operation(..))
+import Charstring exposing (Operation(..))
 import Path.LowLevel as Path exposing (DrawTo, Mode(..), MoveTo, SubPath)
 
 
@@ -41,9 +41,11 @@ convert operations =
             convert rest
 
         [] ->
-            Debug.log "operation skipped in convert" []
+            -- ERROR operation skipped in convert
+            []
 
 
+asFloats : ( Int, Int ) -> ( Float, Float )
 asFloats ( x, y ) =
     ( toFloat x, toFloat y )
 

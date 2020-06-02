@@ -1,14 +1,15 @@
 module Decode.CompactFontFormat exposing (GID(..), OffsetSize(..), SID(..), card16, card8, offset, offsetSize, offsetSizeInBytes, sid, version)
 
 import Bitwise
-import Bytes exposing (Bytes, Endianness(..))
+import Bytes exposing (Endianness(..))
 import Bytes.Decode as Decode exposing (Decoder, Step(..))
-import Bytes.Encode as Encode
 import Decode.Extra exposing (andMap)
 
 
 type alias Version =
-    { major : Int, minor : Int }
+    { major : Int
+    , minor : Int
+    }
 
 
 version : Decoder Version
@@ -79,10 +80,7 @@ offsetSize =
                         Decode.succeed Bytes4
 
                     _ ->
-                        let
-                            _ =
-                                Debug.log "invalid offset size " size
-                        in
+                        -- ERROR invalid offset size
                         Decode.fail
             )
 
@@ -101,7 +99,6 @@ offset size =
             Decode.succeed (\small large -> small + Bitwise.shiftLeftBy 16 large)
                 |> andMap (Decode.unsignedInt16 BE)
                 |> andMap Decode.unsignedInt8
-                |> Decode.map (Debug.log "---------------> unchecked logic")
 
         Bytes4 ->
             Decode.unsignedInt32 BE
