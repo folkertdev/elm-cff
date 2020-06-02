@@ -1,25 +1,30 @@
-module Dict.Private exposing (Private, decode, defaultPrivate)
+module Dict.Private exposing (Private, default, decode)
+
+{-|
+
+@docs Private, default, decode
+
+-}
 
 import Bytes.Decode as Decode exposing (Decoder, Step(..))
-import Number exposing (Entry, Number, Operator(..), entry)
+import Decode.Extra
+import Dict.Operator exposing (Argument, Operator, argumentToFloat, argumentToInt)
 
 
-type alias Numbers =
-    List Number.Number
-
-
+{-| The private dict.
+-}
 type alias Private =
-    { blues : Numbers
-    , other_blues : Numbers
-    , family_blues : Numbers
-    , family_other_blues : Numbers
+    { blues : List Argument
+    , other_blues : List Argument
+    , family_blues : List Argument
+    , family_other_blues : List Argument
     , blue_scale : Float
     , blue_shift : Float
     , blue_fuzz : Float
     , std_hw : Maybe Float
     , std_vw : Maybe Float
-    , stem_snap_h : Numbers
-    , stem_snap_v : Numbers
+    , stem_snap_h : List Argument
+    , stem_snap_v : List Argument
     , force_bold : Bool
     , language_group : Int
     , expansion_factor : Float
@@ -30,7 +35,10 @@ type alias Private =
     }
 
 
-defaultPrivate =
+{-| The default values for the `Private` dict.
+-}
+default : Private
+default =
     { blues = []
     , other_blues = []
     , family_blues = []
@@ -52,10 +60,12 @@ defaultPrivate =
     }
 
 
+{-| Decode the private dict given its size in bytes
+-}
 decode : Int -> Decoder Private
 decode remainingBytes =
     -- TODO error in counting the bytes?
-    Decode.loop ( remainingBytes - 2, defaultPrivate ) decodeHelp
+    Decode.loop ( remainingBytes - 2, default ) decodeHelp
 
 
 decodeHelp ( remainingBytes, private ) =
@@ -63,85 +73,81 @@ decodeHelp ( remainingBytes, private ) =
         Decode.succeed (Done private)
 
     else
-        entry
+        Dict.Operator.decode
             |> Decode.andThen
-                (\({ operator, numbers, size } as et) ->
-                    case applyOperator operator numbers private of
+                (\({ opcode, arguments, size } as operator) ->
+                    case applyOperator operator arguments private of
                         Nothing ->
                             -- NOTE there is probably something weird with counting the bytes going on here
-                            let
-                                _ =
-                                    Debug.log "decodeHelp failed apply operator failed" ( ( operator, numbers ), size, remainingBytes )
-                            in
-                            Decode.fail
+                            Decode.Extra.failWith "decodeHelp failed apply operator failed"
 
                         Just newPrivate ->
                             Decode.succeed (Loop ( remainingBytes - size, newPrivate ))
                 )
 
 
-applyOperator : Operator -> List Number -> Private -> Maybe Private
-applyOperator (Operator _ operator) numbers private =
+applyOperator : Operator -> List Argument -> Private -> Maybe Private
+applyOperator { opcode } arguments private =
     let
         withHead f =
-            Maybe.map f (List.head numbers)
+            Maybe.map f (List.head arguments)
     in
     -- TODO rust code uses first here
-    case operator of
+    case opcode of
         6 ->
-            Just { private | blues = numbers }
+            Just { private | blues = arguments }
 
         7 ->
-            Just { private | other_blues = numbers }
+            Just { private | other_blues = arguments }
 
         8 ->
-            Just { private | family_blues = numbers }
+            Just { private | family_blues = arguments }
 
         9 ->
-            Just { private | family_other_blues = numbers }
+            Just { private | family_other_blues = arguments }
 
         10 ->
-            Just { private | std_hw = List.head numbers |> Maybe.map Number.toFloat }
+            Just { private | std_hw = List.head arguments |> Maybe.map argumentToFloat }
 
         11 ->
-            Just { private | std_vw = List.head numbers |> Maybe.map Number.toFloat }
+            Just { private | std_vw = List.head arguments |> Maybe.map argumentToFloat }
 
         19 ->
-            Just { private | subroutines = List.head numbers |> Maybe.map Number.toInt }
+            Just { private | subroutines = List.head arguments |> Maybe.map argumentToInt }
 
         20 ->
-            withHead (\v -> { private | default_width_x = v |> Number.toInt })
+            withHead (\v -> { private | default_width_x = v |> argumentToInt })
 
         21 ->
-            withHead (\v -> { private | nominal_width_x = v |> Number.toInt })
+            withHead (\v -> { private | nominal_width_x = v |> argumentToInt })
 
         --
         3081 ->
-            withHead (\v -> { private | blue_scale = v |> Number.toFloat })
+            withHead (\v -> { private | blue_scale = v |> argumentToFloat })
 
         3082 ->
-            withHead (\v -> { private | blue_shift = v |> Number.toFloat })
+            withHead (\v -> { private | blue_shift = v |> argumentToFloat })
 
         3083 ->
-            withHead (\v -> { private | blue_fuzz = v |> Number.toFloat })
+            withHead (\v -> { private | blue_fuzz = v |> argumentToFloat })
 
         3084 ->
-            Just { private | stem_snap_h = numbers }
+            Just { private | stem_snap_h = arguments }
 
         3085 ->
-            Just { private | stem_snap_v = numbers }
+            Just { private | stem_snap_v = arguments }
 
         3086 ->
-            withHead (\v -> { private | force_bold = Number.toInt v /= 0 })
+            withHead (\v -> { private | force_bold = argumentToInt v /= 0 })
 
         3089 ->
-            withHead (\v -> { private | language_group = v |> Number.toInt })
+            withHead (\v -> { private | language_group = v |> argumentToInt })
 
         3090 ->
-            withHead (\v -> { private | expansion_factor = v |> Number.toFloat })
+            withHead (\v -> { private | expansion_factor = v |> argumentToFloat })
 
         3091 ->
-            withHead (\v -> { private | initial_random_seed = v |> Number.toInt })
+            withHead (\v -> { private | initial_random_seed = v |> argumentToInt })
 
         _ ->
             Nothing

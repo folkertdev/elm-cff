@@ -15,7 +15,7 @@ The functions in this module will automatically close the path.
 
 -}
 
-import Charstring.Internal as Charstring exposing (Charstring, Operation(..))
+import Charstring exposing (Charstring, Operation(..))
 import Path.LowLevel as Path exposing (DrawTo, Mode(..), MoveTo, SubPath)
 
 

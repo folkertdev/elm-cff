@@ -1,24 +1,20 @@
-module Charstring.Internal exposing
+module Charstring exposing
     ( Charstring
     , Operation(..), Point
     , decode, Subroutines
     )
 
-{-| The Charstring (CFF) internals
-
-A charstring is a sequence of numbers that encode drawing and layout operators like moveto, lineto, and curveto.
+{-| A charstring is a sequence of numbers that encodes the shape of a glyph with drawing and layout operators like moveto, lineto, and curveto.
 
 Because both operators and their arguments are numbers, we have to differentiate the two.
 The operators use the numbers 0..31 (as unsignedInt8) and arguments use all other values.
-To be able to use 0..31 as arguments too, the arguments are shifted (in `Charstring.Number`).
+To be able to use 0..31 as arguments too, the arguments are shifted (specifics are in `Charstring.Number`).
 
 The arguments come first and are pushed onto a stack (or really a dequeue, we mostly use first in first out).
-When an operator is found, the arguments and the operator are bundled into a `Segment`.
+When an operator is found, the arguments and the operator are bundled together.
 
-A tricky thing is that while most operators only take these arguments, the masks can also chomp some bytes after
-the operator token. This means that we have to decode segment-by-segment.
-
-[spec]: https://www.adobe.com/content/dam/acom/en/devnet/font/pdfs/5177.Type2.pdf
+A tricky thing is that while most operators only take these arguments, the mask operators can also chomp some bytes after
+the operator token. This means that we have to decode from left to right, one full operation at a time.
 
 @docs Charstring
 
@@ -38,10 +34,7 @@ import Decode.CompactFontFormat
 import Decode.Extra exposing (andMap)
 
 
-{-| A Charstring
-
-The charstring is what defines the actual shape of a glyph. It is a list of drawing instructions (like moveto, lineto, and curveto).
-
+{-| The `Charstring` is what defines the actual shape of a glyph. It is a list of drawing instructions (like moveto, lineto, and curveto).
 -}
 type alias Charstring =
     List Operation
@@ -53,15 +46,15 @@ type alias Point =
     { x : Int, y : Int }
 
 
-{-| The drawing operations
+{-| The drawing operations. For the full details see the [charstring 2 spec][spec].
 
-For the full details see the [charstring 2 spec]().
+  - **HintMask** and **CounterMask**: masks to turn on stem hints
+  - **HStem** and **VStem** definition of stems
+  - **Width**: optional value that gives the width of the charstring
+  - **MoveTo**: move the drawing cursor
+  - **LineTo** and **CurveTo**: draw a line (resp. a cubic curve) from the current drawing cursor
 
-  - _HintMask_ and _CounterMask_: masks to turn on stem hints
-  - _HStem_ and _VStem_ definition of stems
-  - _Width_: optional value that gives the width of the charstring
-  - _MoveTo_: move the drawing cursor
-  - _LineTo_ and _CurveTo_: draw a line (resp. a cubic curve) from the current drawing cursor
+[spec]: https://www.adobe.com/content/dam/acom/en/devnet/font/pdfs/5177.Type2.pdf
 
 -}
 type Operation
@@ -75,7 +68,7 @@ type Operation
     | CurveTo Point Point Point
 
 
-{-| Subroutines are initially stored as a `Bytes` sequence.
+{-| Subroutines are initially stored as an array of `Bytes` objects. Global subroutines are a CFF table, local subroutines are part of the PRIVATE table.
 
 At any point between operators in a charstring, a subroutine can be invoked.
 Subroutines are pieces of charstrings that occur often and are therfore abstracted to save space.
@@ -84,7 +77,8 @@ Subroutines can be either global (used by all fonts in a fontset) or local (used
 Decoding subroutines correctly is tricky because the decoding depends on the current `State`, in particular
 the arguments on the stack (`State.argumentStack`).
 
-The solution I've settled on is to store the subroutines as bytes, and when a subroutine is called, we evaluate the normal charstring decoder with the subroutine bytes.
+The solution I've settled on is to store the subroutines as `Bytes`, and when a subroutine is called, we evaluate the normal charstring decoder with the subroutine bytes.
+The storage of the subroutines in this way is cheap, because a `Bytes` slice really only stores an offset and a length. It doesn't copy the underlying `Bytes`.
 
 -}
 type alias Subroutines =

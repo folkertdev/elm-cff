@@ -1,47 +1,72 @@
-module Index exposing (charstring, charstringWithOptions, name, string, subroutines, top)
+module Index exposing
+    ( top, subroutines, name, string
+    , charstring, charstringWithOptions
+    )
+
+{-| Decoders for CFF Index structures
+
+@docs top, subroutines, name, string
+@docs charstring, charstringWithOptions
+
+-}
 
 import Array exposing (Array)
 import Bitwise
 import Bytes exposing (Bytes, Endianness(..))
 import Bytes.Decode as Decode exposing (Decoder, Step(..))
-import Charstring.Internal as Charstring exposing (Charstring, Subroutines)
+import Charstring exposing (Charstring, Subroutines)
 import Decode.CompactFontFormat
 import Decode.Extra exposing (andMap)
 import Dict.Top exposing (Top)
 
 
+{-| Decode the top-level dicts for all fonts in the fontset
+-}
 top : Decoder (Array Top)
 top =
     sizedIndex Dict.Top.decode
         |> Decode.map Array.fromList
 
 
-name : Decoder (List String)
+{-| Decode the name INDEX.
+
+The name index contains the names of the fonts in the fontset
+
+-}
+name : Decoder (Array String)
 name =
     sizedIndex Decode.string
+        |> Decode.map Array.fromList
 
 
-string : Decoder (List String)
+{-| Decode the string INDEX
+
+All the strings, with the exception of the FontName and CIDFontName strings (which appear in the Name INDEX), used by different fonts in the fontset
+
+-}
+string : Decoder (Array String)
 string =
     sizedIndex Decode.string
+        |> Decode.map Array.fromList
 
 
-charstring : Decoder (List Charstring)
+{-| Decode a charstring INDEX
+-}
+charstring : Decoder (Array Charstring)
 charstring =
-    let
-        context =
-            { global = Array.empty
-            , local = Nothing
-            }
-    in
-    sizedIndex (\size -> Charstring.decode context)
+    charstringWithOptions { global = Array.empty, local = Nothing }
 
 
-charstringWithOptions : { global : Subroutines, local : Maybe Subroutines } -> Decoder (List Charstring)
+{-| Decode a charstring INDEX with custom global and local subroutines
+-}
+charstringWithOptions : { global : Subroutines, local : Maybe Subroutines } -> Decoder (Array Charstring)
 charstringWithOptions subs =
     sizedIndex (\size -> Charstring.decode subs)
+        |> Decode.map Array.fromList
 
 
+{-| Decode a subroutine INDEX
+-}
 subroutines : Decoder Subroutines
 subroutines =
     sizedIndex Decode.bytes

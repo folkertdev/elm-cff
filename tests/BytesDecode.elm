@@ -3,7 +3,7 @@ module BytesDecode exposing (suite)
 import Bytes exposing (Bytes, Endianness(..))
 import Bytes.Decode as Decode
 import Bytes.Encode as Encode
-import Charstring.Internal as Charstring exposing (Operation(..), Point)
+import Charstring exposing (Operation(..), Point)
 import Charstring.Number exposing (Number(..))
 import Decode.Extra
 import Expect exposing (Expectation)

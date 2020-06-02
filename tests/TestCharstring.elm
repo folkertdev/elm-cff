@@ -4,7 +4,7 @@ import Array
 import Bytes exposing (Bytes, Endianness(..))
 import Bytes.Decode as Decode
 import Bytes.Encode as Encode
-import Charstring.Internal as Charstring exposing (Operation(..), Point, initialSubroutines)
+import Charstring exposing (Operation(..), Point)
 import Charstring.Number exposing (Number(..))
 import Expect exposing (Expectation)
 import Fuzz exposing (Fuzzer, int, list, string)
@@ -57,7 +57,7 @@ testCharstring name args operators result =
                     encode args operators
 
                 decoder =
-                    Charstring.decode (Bytes.width bytes) { global = Array.empty, local = Nothing }
+                    Charstring.decode { global = Array.empty, local = Nothing }
             in
             Decode.decode decoder bytes
                 |> Expect.equal (Just result)
@@ -160,7 +160,7 @@ subrcall =
                         Array.repeat 200 emptyBytes |> Array.set 107 subroutine
 
                     decoder =
-                        Charstring.decode (Bytes.width bytes) { global = Array.empty, local = Just locals }
+                        Charstring.decode { global = Array.empty, local = Just locals }
                 in
                 Decode.decode decoder bytes
                     |> Expect.equal (Just expected)
@@ -198,7 +198,7 @@ subrcall =
                         Array.repeat 200 emptyBytes |> Array.set 107 subroutine
 
                     decoder =
-                        Charstring.decode (Bytes.width bytes) { global = initialSubroutines, local = Just locals }
+                        Charstring.decode { global = Array.empty, local = Just locals }
                 in
                 Decode.decode decoder bytes
                     |> Expect.equal (Just expected)
@@ -236,7 +236,7 @@ gsubrcall =
                         Array.repeat 200 emptyBytes |> Array.set 107 subroutine
 
                     decoder =
-                        Charstring.decode (Bytes.width bytes) { global = globals, local = Nothing }
+                        Charstring.decode { global = globals, local = Nothing }
                 in
                 Decode.decode decoder bytes
                     |> Expect.equal (Just expected)
@@ -274,7 +274,7 @@ gsubrcall =
                         Array.repeat 200 emptyBytes |> Array.set 107 subroutine
 
                     decoder =
-                        Charstring.decode (Bytes.width bytes) { global = globals, local = Nothing }
+                        Charstring.decode { global = globals, local = Nothing }
                 in
                 Decode.decode decoder bytes
                     |> Expect.equal (Just expected)
@@ -309,7 +309,7 @@ hintmask =
                         ]
 
                     decoder =
-                        Charstring.decode (Bytes.width bytes) { global = initialSubroutines, local = Nothing }
+                        Charstring.decode { global = Array.empty, local = Nothing }
                 in
                 Decode.decode decoder bytes
                     |> Expect.equal (Just expected)
@@ -342,7 +342,7 @@ cntrmask =
                         ]
 
                     decoder =
-                        Charstring.decode (Bytes.width bytes) { global = initialSubroutines, local = Nothing }
+                        Charstring.decode { global = Array.empty, local = Nothing }
                 in
                 Decode.decode decoder bytes
                     |> Expect.equal (Just expected)

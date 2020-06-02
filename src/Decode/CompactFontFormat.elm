@@ -1,10 +1,32 @@
-module Decode.CompactFontFormat exposing (OffsetSize(..), card16, card8, offset, offsetSize, offsetSizeInBytes)
+module Decode.CompactFontFormat exposing (GID(..), OffsetSize(..), SID(..), card16, card8, offset, offsetSize, offsetSizeInBytes, sid, version)
 
 import Bitwise
 import Bytes exposing (Bytes, Endianness(..))
 import Bytes.Decode as Decode exposing (Decoder, Step(..))
 import Bytes.Encode as Encode
 import Decode.Extra exposing (andMap)
+
+
+type alias Version =
+    { major : Int, minor : Int }
+
+
+version : Decoder Version
+version =
+    Decode.map2 Version Decode.unsignedInt8 Decode.unsignedInt8
+
+
+type SID
+    = SID Int
+
+
+sid : Decoder SID
+sid =
+    Decode.map SID (Decode.unsignedInt16 BE)
+
+
+type GID
+    = GID Int
 
 
 card8 : Decoder Int

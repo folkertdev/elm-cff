@@ -15,7 +15,8 @@ module Dict.Top exposing
 -}
 
 import Bytes.Decode as Decode exposing (Decoder, Step(..))
-import Number exposing (Number, Operator(..), entry)
+import Decode.Extra
+import Dict.Operator exposing (Argument, Operator, argumentToFloat, argumentToInt)
 
 
 {-| Decode the top dict given its size (in bytes)
@@ -37,34 +38,24 @@ decodeHelp ( remainingBytes, top, cid ) =
             Decode.succeed (Done top)
 
     else
-        entry
+        Dict.Operator.decode
             |> Decode.andThen
-                (\{ operator, numbers, size } ->
-                    case operator of
-                        Operator _ opcode ->
-                            if opcode >= 3102 && opcode <= 3110 then
-                                case updateCid operator cid numbers of
-                                    Nothing ->
-                                        let
-                                            _ =
-                                                Debug.log "decodeHelp failed apply cid operator failed" ()
-                                        in
-                                        Decode.fail
+                (\({ opcode, arguments, size } as operator) ->
+                    if opcode >= 3102 && opcode <= 3110 then
+                        case updateCid operator cid arguments of
+                            Nothing ->
+                                Decode.Extra.failWith "decodeHelp failed apply cid operator failed"
 
-                                    Just newCid ->
-                                        Decode.succeed (Loop ( remainingBytes - size, top, newCid ))
+                            Just newCid ->
+                                Decode.succeed (Loop ( remainingBytes - size, top, newCid ))
 
-                            else
-                                case updateTop operator top numbers of
-                                    Nothing ->
-                                        let
-                                            _ =
-                                                Debug.log "decodeHelp failed apply operator failed" ( operator, numbers, ( top, remainingBytes, size ) )
-                                        in
-                                        Decode.fail
+                    else
+                        case updateTop operator top arguments of
+                            Nothing ->
+                                Decode.Extra.failWith "decodeHelp failed apply operator failed"
 
-                                    Just newTop ->
-                                        Decode.succeed (Loop ( remainingBytes - size, newTop, cid ))
+                            Just newTop ->
+                                Decode.succeed (Loop ( remainingBytes - size, newTop, cid ))
                 )
 
 
@@ -158,7 +149,7 @@ type alias Top =
     , unique_id : Maybe Int
     , font_bounding_box : FontBoundingBox
     , stroke_width : Int
-    , xuid : Maybe (List Number)
+    , xuid : Maybe (List Argument)
     , charset : Int
     , encoding : Int
     , charstrings : Maybe Int
@@ -166,7 +157,7 @@ type alias Top =
     , synthetic_base : Maybe Int
     , post_script : Maybe Int
     , base_font_name : Maybe Int
-    , base_font_blend : Maybe (List Number)
+    , base_font_blend : Maybe (List Argument)
     , cid : Maybe Cid
     }
 
@@ -201,37 +192,34 @@ defaultTop =
     }
 
 
-updateCid : Operator -> Cid -> List Number -> Maybe Cid
-updateCid operator cid numbers =
+updateCid : Operator -> Cid -> List Argument -> Maybe Cid
+updateCid operator cid arguments =
     let
-        (Operator _ opcode) =
-            operator
-
         withHeadInt f =
-            case numbers of
+            case arguments of
                 first :: rest ->
-                    Just (f (Number.toInt first))
+                    Just (f (argumentToInt first))
 
                 [] ->
                     Nothing
 
         withHeadFloat f =
-            case numbers of
+            case arguments of
                 first :: rest ->
-                    Just (f (Number.toFloat first))
+                    Just (f (argumentToFloat first))
 
                 [] ->
                     Nothing
     in
-    case opcode of
+    case operator.opcode of
         3102 ->
-            case numbers of
+            case arguments of
                 [ registry, ordering, supplement ] ->
                     let
                         ros =
-                            ( Number.toInt registry
-                            , Number.toInt ordering
-                            , Number.toInt supplement
+                            ( argumentToInt registry
+                            , argumentToInt ordering
+                            , argumentToInt supplement
                             )
                     in
                     Just { cid | ros = ros }
@@ -267,29 +255,26 @@ updateCid operator cid numbers =
             Debug.log "cid fell through" Nothing
 
 
-updateTop : Operator -> Top -> List Number -> Maybe Top
-updateTop operator top numbers =
+updateTop : Operator -> Top -> List Argument -> Maybe Top
+updateTop operator top arguments =
     let
-        (Operator _ opcode) =
-            operator
-
         withHeadInt f =
-            case numbers of
+            case arguments of
                 first :: rest ->
-                    Just (f (Number.toInt first))
+                    Just (f (argumentToInt first))
 
                 [] ->
                     Nothing
 
         withHeadFloat f =
-            case numbers of
+            case arguments of
                 first :: rest ->
-                    Just (f (Number.toFloat first))
+                    Just (f (argumentToFloat first))
 
                 [] ->
                     Nothing
     in
-    case opcode of
+    case operator.opcode of
         0 ->
             withHeadInt (\v -> { top | version = Just v })
 
@@ -306,7 +291,7 @@ updateTop operator top numbers =
             withHeadInt (\v -> { top | weight = Just v })
 
         5 ->
-            case List.map Number.toInt numbers of
+            case List.map argumentToInt arguments of
                 [ x1, y1, x2, y2 ] ->
                     Just { top | font_bounding_box = FontBoundingBox (Point x1 y1) (Point x2 y2) }
 
@@ -314,7 +299,7 @@ updateTop operator top numbers =
                     Nothing
 
         14 ->
-            withHeadInt (\v -> { top | xuid = Just numbers })
+            withHeadInt (\v -> { top | xuid = Just arguments })
 
         15 ->
             withHeadInt (\v -> { top | charset = v })
@@ -326,7 +311,7 @@ updateTop operator top numbers =
             withHeadInt (\v -> { top | charstrings = Just v })
 
         18 ->
-            case List.map Number.toInt numbers of
+            case List.map argumentToInt arguments of
                 [ size, offset ] ->
                     Just { top | private = Just { size = size, offset = offset } }
 
@@ -355,7 +340,7 @@ updateTop operator top numbers =
             withHeadInt (\v -> { top | charstring_type = v })
 
         3079 ->
-            case List.map Number.toFloat numbers of
+            case List.map argumentToFloat arguments of
                 [ a, b, c, d, e, f ] ->
                     Just { top | font_matrix = FontMatrix a b c d e f }
 
@@ -375,7 +360,7 @@ updateTop operator top numbers =
             withHeadInt (\v -> { top | base_font_name = Just v })
 
         3095 ->
-            withHeadInt (\v -> { top | base_font_blend = Just numbers })
+            withHeadInt (\v -> { top | base_font_blend = Just arguments })
 
         _ ->
             Debug.log "top fell through" Nothing

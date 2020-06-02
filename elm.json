@@ -8,7 +8,13 @@
         "CompactFontFormat",
         "CompactFontFormat.Svg",
         "Dict.Top",
-        "Charstring.Internal"
+        "Dict.Private",
+        "Dict.Operator",
+        "Index",
+        "Encoding",
+        "Charset",
+        "Glyphs",
+        "Charstring"
     ],
     "elm-version": "0.19.0 <= v < 0.20.0",
     "dependencies": {

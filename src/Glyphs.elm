@@ -1,36 +1,51 @@
-module Glyphs exposing (Glyphs, charstring, parse)
+module Glyphs exposing
+    ( Glyphs
+    , parse
+    , charstring
+    )
+
+{-| The set of glyphs in the font
+
+@docs Glyphs
+@docs parse
+@docs charstring
+
+-}
 
 import Array exposing (Array)
 import Bitwise
 import Bytes exposing (Bytes, Endianness(..))
 import Bytes.Decode as Decode exposing (Decoder, Step(..))
 import Charset exposing (Charset)
-import Charstring.Internal as Charstring exposing (Charstring, Operation, Subroutines)
+import Charstring exposing (Charstring, Operation, Subroutines)
+import Decode.CompactFontFormat exposing (GID(..), SID(..))
 import Dict exposing (Dict)
 import Dict.Private exposing (Private)
 import Dict.Top exposing (Top)
-import Encoding exposing (Encodings)
+import Encoding exposing (Encoding)
 import Index
 
 
+{-| Set of glyphs in the font
+-}
 type alias Glyphs =
     { top : Top
     , private : Private
-
-    -- , subroutines : { global : Array (List Segment), local : Maybe (Array (List Segment)) }
-    , encodings : Encodings
+    , encoding : Encoding
     , charset : Charset
     , charstrings : Array Charstring
     }
 
 
+{-| Parse a `Glyphs`
+-}
 parse : Bytes -> Top -> Subroutines -> Maybe Glyphs
 parse bytes top global =
     private top.private bytes
         |> Maybe.andThen
             (\( privateDict, localSubRoutines ) ->
                 let
-                    decodeCharstrings : Maybe (List Charstring)
+                    decodeCharstrings : Maybe (Array Charstring)
                     decodeCharstrings =
                         case top.charstrings of
                             Nothing ->
@@ -51,20 +66,20 @@ parse bytes top global =
                                 Debug.log "decodeCharsetAndCharstrings failed" Nothing
 
                             Just charstrings ->
-                                decodeWithOffset top.charset (Charset.decode { charset = top.charset, numberOfGlyphs = List.length charstrings }) bytes
-                                    |> Maybe.map (\charset -> ( charstrings, charset ))
+                                decodeWithOffset top.charset (Charset.decode { offset = top.charset, numberOfGlyphs = Array.length charstrings }) bytes
+                                    --decodeWithOffset top.charset (Charset.alternative (Array.length charstrings)) bytes
+                                    |> Maybe.map (\currentCharset -> ( charstrings, currentCharset ))
 
                     decodeEncoding =
-                        decodeWithOffset top.encoding (Encoding.decode top.encoding) bytes
+                        decodeWithOffset top.encoding (Encoding.decode { offset = top.encoding }) bytes
 
-                    constructor encoding ( charstrings, charset ) =
+                    -- decodeWithOffset top.encoding (Encoding.alternative top.encoding) bytes
+                    constructor encodings ( charstrings, currentCharset ) =
                         { top = top
                         , private = privateDict
-
-                        -- , subroutines = { global = global, local = localSubRoutines }
-                        , encodings = encoding
-                        , charset = charset
-                        , charstrings = Array.fromList charstrings
+                        , encoding = encodings
+                        , charset = currentCharset
+                        , charstrings = charstrings
                         }
                 in
                 Maybe.map2 constructor
@@ -106,29 +121,20 @@ private arguments bytes =
                                     Just ( privateDict, Just localSubroutines )
 
         Nothing ->
-            Just ( Dict.Private.defaultPrivate, Nothing )
+            Just ( Dict.Private.default, Nothing )
 
 
 decodeWithOffset offset decoder bytes =
     Decode.decode (Decode.map2 (\_ k -> k) (Decode.bytes offset) decoder) bytes
 
 
-charstring : Glyphs -> Int -> Maybe { width : Int, instructions : Charstring }
-charstring glyphs index =
+{-| Get the charstring of a particular glyph
+-}
+charstring : Int -> Glyphs -> Charstring
+charstring index glyphs =
     case Array.get index glyphs.charstrings of
         Nothing ->
-            Nothing
+            []
 
         Just cstring ->
-            case cstring of
-                (Charstring.Width w) :: rest ->
-                    Just
-                        { width = w + glyphs.private.nominal_width_x
-                        , instructions = cstring
-                        }
-
-                _ ->
-                    Just
-                        { width = glyphs.private.default_width_x
-                        , instructions = cstring
-                        }
+            cstring

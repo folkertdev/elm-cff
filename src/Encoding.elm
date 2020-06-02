@@ -1,28 +1,90 @@
-module Encoding exposing (Encodings, decode, get)
+module Encoding exposing
+    ( Encoding
+    , forChar, forIndex
+    , decode
+    )
+
+{-| The Encoding maps character codes to glyph identifiers
+
+> **Note:** CFF is seldomly used on its own. For instance in OpenType fonts, there is a separate character map (`cmap`) table that does the encoding.
+> Therefore, the code in this module is untested. If you have a font file actually uses the CFF encodings that you can share, please open an issue on the repository.
+
+@docs Encoding
+
+@docs forChar, forIndex
+
+@docs decode
+
+-}
 
 import Array exposing (Array)
-import Bytes.Decode as Decode exposing (Decoder)
+import Array.Extra
+import Bytes.Decode as Decode exposing (Decoder, Step(..))
+import Decode.CompactFontFormat exposing (GID(..))
 import Decode.Extra
+import Dict exposing (Dict)
 
 
-type Encodings
-    = Expert
+
+-- TODO custom encodings? see page 20 of the spec
+
+
+{-| The `Encoding` maps a character code to a glyph identifier.
+
+The character code can be found using `Char.toCode : Char -> Int`. The glyph identifier is used as an index into the array of charstrings.
+It can also be used to get a character's name from the `Charset`.
+
+A pseudo-code example:
+
+    charstrings : Array Charstring
+
+    encoding : Encoding
+
+    toGlyph : Char -> Maybe Charstring
+    toGlyph character =
+        let
+            gid =
+                Encoding.forChar character
+        in
+        Array.get gid charstrings
+
+**Note:** In most cases the CFF encoding is not used. For instance, OpenType fonts define their own encoding in the `cmap` table.
+In those cases, the encoding is still present in the CFF (it often defaults to `0`, the standard encoding) but using it will give wrong results.
+
+-}
+type Encoding
+    = Standard
+    | Expert
     | Format0 Format0Encoding
     | Format1 Format1Encoding
-    | Standard
 
 
+{-| Encoding format used when the order of codes is fairly random.
+-}
 type alias Format0Encoding =
     Array Int
 
 
+{-| Encoding format used when the order of codes is well ordered
+-}
 type alias Format1Encoding =
     Array Range
 
 
-decode : Int -> Decoder Encodings
-decode encoding =
-    case encoding of
+{-| Decode and encoding given the encoding format
+
+The offset value is (a)bused to indicate the encoding format.
+
+  - **offset = 0**: the _standard_ encoding will be used
+  - **offset = 1**: the _expert_ encoding will be used
+  - **otherwise** the encoding will be decoded
+
+When the offset is 0 or 1 the encoding is not encoded at all.
+
+-}
+decode : { offset : Int } -> Decoder Encoding
+decode { offset } =
+    case offset of
         0 ->
             Decode.succeed Standard
 
@@ -41,7 +103,82 @@ decode encoding =
                                 Decode.map Format1 decodeFormat1
 
                             _ ->
-                                Decode.fail
+                                Decode.Extra.failWith ("unsupported encoding format: " ++ String.fromInt format)
+                    )
+
+
+alternative : Int -> Decoder (Dict Int Int)
+alternative offet =
+    case offet of
+        0 ->
+            standard
+                |> Array.toList
+                |> List.indexedMap Tuple.pair
+                |> Dict.fromList
+                |> Decode.succeed
+
+        1 ->
+            expert
+                |> Array.toList
+                |> Dict.fromList
+                |> Decode.succeed
+
+        _ ->
+            Decode.unsignedInt8
+                |> Decode.andThen
+                    (\format ->
+                        case Debug.log "=====> encoding format" format of
+                            0 ->
+                                Decode.unsignedInt8
+                                    |> Decode.andThen
+                                        (\nCodes ->
+                                            let
+                                                looper ( i, encoding ) =
+                                                    if i < nCodes then
+                                                        Decode.unsignedInt8 |> Decode.map (\code -> Loop ( i + 1, Dict.insert code i encoding ))
+
+                                                    else
+                                                        Decode.succeed (Done encoding)
+                                            in
+                                            Decode.loop ( 0, Dict.empty ) looper
+                                        )
+
+                            1 ->
+                                Decode.unsignedInt8
+                                    |> Decode.andThen
+                                        (\nRanges ->
+                                            let
+                                                looper ( code, i, encoding ) =
+                                                    if i < Debug.log "nranges" nRanges then
+                                                        Decode.unsignedInt8
+                                                            |> Decode.andThen
+                                                                (\first ->
+                                                                    Decode.unsignedInt8
+                                                                        |> Decode.map
+                                                                            (\nLeft ->
+                                                                                let
+                                                                                    ( newCode, newEncoding ) =
+                                                                                        go first nLeft first encoding code
+                                                                                in
+                                                                                Loop ( newCode, i + 1, newEncoding )
+                                                                            )
+                                                                )
+
+                                                    else
+                                                        Decode.succeed (Done encoding)
+
+                                                go first nLeft j encoding code =
+                                                    if j <= first + nLeft then
+                                                        go first nLeft (j + 1) (Dict.insert j code encoding) (code + 1)
+
+                                                    else
+                                                        Debug.log "---------------> new code new encoding" ( code, encoding )
+                                            in
+                                            Decode.loop ( 1, 0, Dict.empty ) looper
+                                        )
+
+                            _ ->
+                                Decode.Extra.failWith ("unsupported encoding format: " ++ String.fromInt format)
                     )
 
 
@@ -59,6 +196,12 @@ decodeFormat1 =
             )
 
 
+{-| A range of codes
+
+  - **first**: first code in range
+  - **nLeft**: codes left in range (excluding `first`)
+
+-}
 type alias Range =
     { first : Int, nLeft : Int }
 
@@ -71,9 +214,27 @@ decodeRange =
 -- Get
 
 
+{-| Returns the glyph identifier for a character
+-}
+forChar : Encoding -> Char -> Int
+forChar encoding char =
+    forIndex encoding (Char.toCode char)
+
+
+{-| Returns the glyph identifier for an index
+
+Defaults to `0` (`.notdef`).
+
+-}
+forIndex : Encoding -> Int -> Int
+forIndex encodings index =
+    get index encodings
+        |> Maybe.withDefault 0
+
+
 {-| Returns the string ID for the supplied codepoint.
 -}
-get : Int -> Encodings -> Int
+get : Int -> Encoding -> Maybe Int
 get codepoint encodings =
     case encodings of
         Format0 array ->
@@ -84,24 +245,25 @@ get codepoint encodings =
 
         -- https://github.com/glyph-rs/cff/blob/master/src/glyphs/encodings.rs#L126
         Expert ->
-            Debug.todo "expert"
+            Array.Extra.binarySearchByKey Tuple.first codepoint expert
+                |> Result.toMaybe
 
         Standard ->
-            Debug.todo "standart"
+            Array.Extra.binarySearch codepoint standard |> Result.toMaybe
 
 
-getFormat0 : Int -> Format0Encoding -> Int
+getFormat0 : Int -> Format0Encoding -> Maybe Int
 getFormat0 codepoint array =
     case Array.get codepoint array of
         Just i ->
             -- add `1` because `.notdef`
-            i + 1
+            Just (i + 1)
 
         Nothing ->
-            0
+            Nothing
 
 
-getFormat1 : Int -> Format1Encoding -> Int
+getFormat1 : Int -> Format1Encoding -> Maybe Int
 getFormat1 codepoint_ array =
     let
         folder range accum =
@@ -117,7 +279,7 @@ getFormat1 codepoint_ array =
                         Err (codepoint - (range.nLeft + 1))
     in
     Array.foldl folder (Err codepoint_) array
-        |> Result.withDefault 0
+        |> Result.toMaybe
 
 
 

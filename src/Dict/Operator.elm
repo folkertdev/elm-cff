@@ -1,46 +1,68 @@
-module Number exposing (Entry, Number(..), Operator(..), Size(..), entry, number, real, toFloat, toInt)
+module Dict.Operator exposing
+    ( Operator, Argument
+    , decode
+    , argumentToInt, argumentToFloat
+    )
+
+{-|
+
+@docs Operator, Argument
+
+@docs decode
+
+@docs argumentToInt, argumentToFloat
+
+-}
 
 import Bitwise
 import Bytes exposing (Endianness(..))
 import Bytes.Decode as Decode exposing (Decoder, Step(..))
+import Decode.Extra
 
 
-type alias Entry =
-    { operator : Operator, numbers : List Number, size : Int }
+{-| Operators used in DICT structures
+
+  - **opcode**: the code of the operator
+  - **arguments**: arguments for the operator
+  - **size**: the size in bytes of the whole operator
+
+-}
+type alias Operator =
+    { opcode : Int, arguments : List Argument, size : Int }
 
 
-type Operator
-    = Operator Bool Int
-
-
-decodeOperator : Decoder Operator
+decodeOperator : Decoder OpCode
 decodeOperator =
     Decode.unsignedInt8
         |> Decode.andThen decodeOperatorHelp
 
 
-decodeOperatorHelp : Int -> Decoder Operator
+decodeOperatorHelp : Int -> Decoder OpCode
 decodeOperatorHelp operator =
     if operator /= 12 then
-        Decode.succeed (Operator False operator)
+        Decode.succeed (OpCode False operator)
 
     else
         Decode.unsignedInt8
-            |> Decode.andThen
-                (\operator2 ->
-                    Decode.succeed (Operator True <| Bitwise.shiftLeftBy 8 operator + operator2)
-                )
+            |> Decode.map
+                (\operator2 -> OpCode True <| Bitwise.shiftLeftBy 8 operator + operator2)
 
 
-entry : Decoder Entry
-entry =
+{-| Decode an `Operator`.
+-}
+decode : Decoder Operator
+decode =
     Decode.loop ( 0, [] ) entryHelp
 
 
-operatorSize : Operator -> Int
+type OpCode
+    = OpCode Bool Int
+
+
+operatorSize : OpCode -> Int
 operatorSize op =
     case op of
-        Operator twoBytes _ ->
+        OpCode twoBytes _ ->
             if twoBytes then
                 2
 
@@ -51,28 +73,27 @@ operatorSize op =
 entryHelp ( size, accum ) =
     Decode.unsignedInt8
         |> Decode.andThen numberHelp
-        |> Decode.andThen
+        |> Decode.map
             (\first ->
                 case first of
-                    Err ((Operator twoBytes opcode) as operator) ->
-                        Decode.succeed
-                            (Done
-                                { operator = operator
-                                , numbers = List.reverse accum
-                                , size = size + operatorSize operator
-                                }
-                            )
+                    Err ((OpCode twoBytes opcode) as operator) ->
+                        Done
+                            { opcode = opcode
+                            , arguments = List.reverse accum
+                            , size = size + operatorSize operator
+                            }
 
                     Ok ((Integer (Size numSize) _) as num) ->
-                        Decode.succeed (Loop ( size + numSize, num :: accum ))
+                        Loop ( size + numSize, num :: accum )
 
                     Ok ((Real (Size numSize) _) as num) ->
-                        Decode.succeed (Loop ( size + numSize, num :: accum ))
+                        Loop ( size + numSize, num :: accum )
             )
 
 
-toInt : Number -> Int
-toInt num =
+{-| -}
+argumentToInt : Argument -> Int
+argumentToInt num =
     case num of
         Integer _ i ->
             i
@@ -81,8 +102,9 @@ toInt num =
             round f
 
 
-toFloat : Number -> Float
-toFloat num =
+{-| -}
+argumentToFloat : Argument -> Float
+argumentToFloat num =
     case num of
         Integer _ i ->
             Basics.toFloat i
@@ -91,7 +113,9 @@ toFloat num =
             f
 
 
-type Number
+{-| Dict Operator arguments
+-}
+type Argument
     = Integer Size Int
     | Real Size Float
 
@@ -100,8 +124,8 @@ type Size
     = Size Int
 
 
-number : Decoder Number
-number =
+decodeArgument : Decoder Argument
+decodeArgument =
     Decode.unsignedInt8
         |> Decode.andThen numberHelp
         |> Decode.andThen
@@ -115,14 +139,14 @@ number =
             )
 
 
-numberHelp : Int -> Decoder (Result Operator Number)
+numberHelp : Int -> Decoder (Result OpCode Argument)
 numberHelp first =
     if first >= 0x20 && first <= 0xF6 then
         Decode.succeed (Ok (Integer (Size 1) (first - 139)))
 
     else if first >= 0xF7 && first <= 0xFA then
         Decode.unsignedInt8
-            |> Decode.andThen
+            |> Decode.map
                 (\second ->
                     let
                         b0 =
@@ -131,12 +155,12 @@ numberHelp first =
                         b1 =
                             second
                     in
-                    Decode.succeed (Ok (Integer (Size 2) (b0 + b1 + 108)))
+                    Ok (Integer (Size 2) (b0 + b1 + 108))
                 )
 
     else if first >= 0xFB && first <= 0xFE then
         Decode.unsignedInt8
-            |> Decode.andThen
+            |> Decode.map
                 (\second ->
                     let
                         b0 =
@@ -145,7 +169,7 @@ numberHelp first =
                         b1 =
                             second
                     in
-                    Decode.succeed (Ok (Integer (Size 2) (b0 + b1 - 108)))
+                    Ok (Integer (Size 2) (b0 + b1 - 108))
                 )
 
     else
@@ -166,13 +190,11 @@ numberHelp first =
                     Decode.map Err (decodeOperatorHelp first)
 
                 else
-                    let
-                        _ =
-                            Debug.log "first fell through" first
-                    in
-                    Decode.fail
+                    Decode.Extra.failWith ("Dict.Operator.numberHelp: opcode fell through " ++ String.fromInt first)
 
 
+{-| Decode a floating-point number
+-}
 real : Decoder ( Size, Float )
 real =
     Decode.loop ( "", Nothing, 0 ) parseRealHelp
