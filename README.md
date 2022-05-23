@@ -26,7 +26,7 @@ Thus we need to keep track carefully of the number of bytes that we've decoded t
 
 **Specs**
 
-* [Compact Font Format](http://wwwimages.adobe.com/www.adobe.com/content/dam/acom/en/devnet/font/pdfs/5176.CFF.pdf)
+* [Compact Font Format](http://www.adobe.com/content/dam/acom/en/devnet/font/pdfs/5176.CFF.pdf)
 * [Type 2 Charstrings](https://www.adobe.com/content/dam/acom/en/devnet/font/pdfs/5177.Type2.pdf)
 
 
